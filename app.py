@@ -35,6 +35,7 @@ def _merge_streamlit_secrets() -> None:
             "GEMINI_RELAY_PROTOCOL",
             "GEMINI_RELAY_AUTH",
             "WEBHOOK_URL",
+            "WEBHOOK_FORMAT",
         ):
             if key in st.secrets:
                 os.environ[key] = str(st.secrets[key])
@@ -52,7 +53,7 @@ _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
 from ideaspark.batch_evaluator import evaluate_batch, merge_kept_results
-from ideaspark.webhook_notify import build_batch_payload, post_json_webhook
+from ideaspark.webhook_notify import build_webhook_payload, post_json_webhook
 from ideaspark.cartesian import sample_cartesian_recipes
 from ideaspark.combinator import draw_recipe, recipe_nouns_join, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
@@ -103,6 +104,14 @@ def _webhook_url_resolved() -> str:
     if u:
         return u
     return (os.environ.get("WEBHOOK_URL") or "").strip()
+
+
+def _webhook_format_resolved() -> str:
+    """ideaspark=通用 JSON；wecom_text=企业微信群机器人文本。"""
+    f = (st.session_state.get("webhook_format_input") or os.environ.get("WEBHOOK_FORMAT") or "ideaspark").strip().lower()
+    if f in ("wecom", "wecom_text", "workweixin", "wxwork", "qywx"):
+        return "wecom_text"
+    return "ideaspark"
 
 
 def _relay_kwargs_for_batch() -> dict[str, str | None]:
@@ -513,15 +522,28 @@ def main() -> None:
             "Webhook URL（可选，POST application/json）",
             value=os.environ.get("WEBHOOK_URL", ""),
             key="webhook_url_input",
-            help="本应用发送的是 IdeaSpark 自定义 JSON（见下方说明）。"
-            "飞书/企微/钉钉机器人通常要求固定字段，需自建转发或 n8n 把 body 映射成对方格式；"
-            "仅填官方机器人 URL 常会出现 HTTP 200 但群里收不到。",
+            help="企业微信请选下方「正文格式」为 **企业微信群机器人**，否则会 errcode 40008。",
         )
+        if "webhook_format_input" not in st.session_state:
+            wf = (os.environ.get("WEBHOOK_FORMAT") or "ideaspark").strip().lower()
+            if wf in ("wecom", "wecom_text", "workweixin", "wxwork", "qywx"):
+                wf = "wecom_text"
+            st.session_state.webhook_format_input = wf if wf in ("ideaspark", "wecom_text") else "ideaspark"
+        st.selectbox(
+            "Webhook 正文格式",
+            options=["ideaspark", "wecom_text"],
+            format_func=lambda x: {
+                "ideaspark": "通用 JSON（自建 / n8n 接收）",
+                "wecom_text": "企业微信群机器人（text，避免 40008）",
+            }[x],
+            key="webhook_format_input",
+        )
+        os.environ["WEBHOOK_FORMAT"] = str(st.session_state.get("webhook_format_input", "ideaspark"))
         if wh_url.strip():
             os.environ["WEBHOOK_URL"] = wh_url.strip()
         st.caption(
-            "若提示已推送且 HTTP 200 但群里仍无消息：多为机器人 URL 要求固定 JSON（如飞书 `msg_type`），"
-            "IdeaSpark 的通用结构不会被自动转成群消息；推送成功后的「响应正文」里若有 errcode/msg 可判断原因。"
+            "企业微信机器人必须用 `msgtype=text` 等格式；选「企业微信群机器人」后推送成功时响应里应为 `errcode:0`。"
+            "通用 JSON 用于你自己写的接收服务。"
         )
 
         pr1, pr2 = st.columns(2)
@@ -619,11 +641,12 @@ def main() -> None:
             if wh_auto and all_kept:
                 ok_wh, msg_wh = post_json_webhook(
                     wh_auto,
-                    build_batch_payload(
+                    build_webhook_payload(
                         all_kept,
                         title="IdeaSpark 批量评审",
                         rounds=n_rounds,
                         generated=total_gen,
+                        format=_webhook_format_resolved(),
                     ),
                 )
                 if ok_wh:
@@ -635,11 +658,12 @@ def main() -> None:
 
         if push_wh and st.session_state.pipeline_kept:
             meta = st.session_state.get("pipeline_meta") or {}
-            payload = build_batch_payload(
+            payload = build_webhook_payload(
                 st.session_state.pipeline_kept,
                 title="IdeaSpark 批量评审",
                 rounds=int(meta.get("rounds", 1)),
                 generated=int(meta.get("generated", 0)),
+                format=_webhook_format_resolved(),
             )
             url = _webhook_url_resolved()
             if not url:
