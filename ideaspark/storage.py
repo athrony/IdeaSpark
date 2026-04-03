@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from .combinator import recipe_pairs
 from .config import IDEAS_MD_DIR, SQLITE_PATH, ensure_dirs
 
 
@@ -40,7 +41,7 @@ def init_db() -> None:
 
 def save_to_sqlite(
     recipe_summary: str,
-    recipe_parts: dict[str, str],
+    recipe_parts: Any,
     ev: dict[str, Any],
     source: str = "ideaspark",
 ) -> int:
@@ -48,7 +49,8 @@ def save_to_sqlite(
 
     init_db()
     created = datetime.now().isoformat(timespec="seconds")
-    payload = json.dumps(recipe_parts, ensure_ascii=False)
+    pairs = recipe_pairs(recipe_parts)
+    payload = json.dumps([list(p) for p in pairs], ensure_ascii=False)
     with _conn() as db:
         cur = db.execute(
             """
@@ -75,7 +77,7 @@ def save_to_sqlite(
 
 def save_to_markdown(
     recipe_summary: str,
-    recipe_parts: dict[str, str],
+    recipe_parts: Any,
     ev: dict[str, Any],
     filename_prefix: str = "idea",
 ) -> Path:
@@ -103,8 +105,8 @@ def save_to_markdown(
         "## 配方明细",
         "",
     ]
-    for k, v in recipe_parts.items():
-        lines.append(f"- **{k}**：{v}")
+    for i, (k, v) in enumerate(recipe_pairs(recipe_parts), start=1):
+        lines.append(f"- **{i}. {k}**：{v}")
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path

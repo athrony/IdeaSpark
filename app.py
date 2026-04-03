@@ -44,7 +44,7 @@ st.set_page_config(
 _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
-from ideaspark.combinator import draw_recipe
+from ideaspark.combinator import draw_recipe, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
 from ideaspark.word_bank import add_word, load_categories, save_categories
@@ -135,7 +135,7 @@ def main() -> None:
                 "组合方式",
                 options=list(_combo_labels.keys()),
                 index=0,
-                help="从四类词库中随机抽取若干维度，每维随机一词；词数越少碰撞越尖锐，越多上下文越完整。",
+                help="每一「词槽」独立随机选一类再选一词；同类可重复出现（如 技术+技术）。同一类内尽量抽不同词，词不够时才重复。",
             )
         with row2:
             batch_n = st.number_input(
@@ -172,7 +172,7 @@ def main() -> None:
             overview_rows = [
                 {
                     "序号": i + 1,
-                    "词数": r.get("word_count", len(r.get("parts", {}))),
+                    "词数": r.get("word_count", len(recipe_pairs(r.get("parts")))),
                     "组合": r.get("combo_mode", ""),
                     "一行摘要": r["summary"],
                 }
@@ -187,17 +187,17 @@ def main() -> None:
 
             st.markdown("**维度展开（逐条平铺，无需点开）**")
             for i, r in enumerate(recipes):
-                wc = r.get("word_count", len(r.get("parts", {})))
+                wc = r.get("word_count", len(recipe_pairs(r.get("parts"))))
                 cm = r.get("combo_mode", "")
                 with st.container(border=True):
                     st.markdown(f"##### 第 {i + 1} 条 · {wc} 词 · {cm}")
-                    parts = list(r.get("parts", {}).items())
+                    parts = recipe_pairs(r.get("parts"))
                     if parts:
                         n = len(parts)
                         cols = st.columns(n)
                         for j, (k, v) in enumerate(parts):
                             with cols[j]:
-                                st.caption(k)
+                                st.caption(f"{k} · 槽{j + 1}")
                                 st.markdown(f"**{v}**")
                     st.markdown(f"`{r['summary']}`")
 
