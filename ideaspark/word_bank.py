@@ -8,58 +8,10 @@ from pathlib import Path
 from typing import Any
 
 from .config import WORD_BANK_PATH, ensure_dirs
+from .lexicon_data import LEXICON
 
-# Keys must match UI labels (Chinese) for display consistency
-DEFAULT_CATEGORIES: dict[str, list[str]] = {
-    "技术": [
-        "区块链",
-        "边缘计算",
-        "大语言模型",
-        "计算机视觉",
-        "物联网",
-        "5G/6G",
-        "量子计算",
-        "数字孪生",
-        "联邦学习",
-        "RAG 检索增强",
-    ],
-    "行业": [
-        "医疗健康",
-        "教育培训",
-        "金融科技",
-        "零售电商",
-        "智能制造",
-        "物流供应链",
-        "文娱传媒",
-        "农业食品",
-        "能源环保",
-        "房地产",
-    ],
-    "人群": [
-        "Z 世代",
-        "银发族",
-        "职场新人",
-        "自由职业者",
-        "小微企业主",
-        "一线城市白领",
-        "下沉市场用户",
-        "跨境从业者",
-        "残障人士",
-        "亲子家庭",
-    ],
-    "心理需求": [
-        "省时省力",
-        "社交认同",
-        "安全感",
-        "自我实现",
-        "性价比",
-        "个性化表达",
-        "治愈与放松",
-        "掌控感",
-        "好奇心",
-        "归属感",
-    ],
-}
+# 与 lexicon_data 同步；运行时与用户 JSON 合并
+DEFAULT_CATEGORIES: dict[str, list[str]] = {k: list(v) for k, v in LEXICON.items()}
 
 
 def _load_file(path: Path) -> dict[str, Any] | None:
