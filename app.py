@@ -189,7 +189,8 @@ def main() -> None:
             st.text_input(
                 "中转 Base URL",
                 placeholder="http://101.200.167.88:8001/v1",
-                help="需包含 /v1；若只填到端口会自动补 /v1。",
+                help="须为 OpenAI 兼容网关根路径（程序会请求 …/v1/chat/completions）。"
+                "不要填 Gemini 的 …/v1beta/models/…:generateContent。",
                 key="relay_base_url_input",
             )
             st.text_input(

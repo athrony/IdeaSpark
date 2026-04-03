@@ -93,8 +93,18 @@ def evaluate_with_gemini(recipe_summary: str) -> EvaluationResult:
 
 
 def _normalize_relay_base_url(url: str) -> str:
-    """OpenAI SDK 需要 base_url 以 /v1 结尾（不含具体路径）。"""
+    """
+    OpenAI SDK 会把请求发到 {base_url}/chat/completions。
+    勿填 Gemini 原生地址（…/v1beta/models/...:generateContent），那是另一种协议。
+    """
     u = url.strip().rstrip("/")
+    low = u.lower()
+    if "generatecontent" in low or "/v1beta/models" in low:
+        raise ValueError(
+            "你填的是 Gemini 原生接口（generateContent），本应用走的是 OpenAI 兼容的「聊天补全」。"
+            "请到中转商文档里找「OpenAI 兼容」或 Chat Completions 的网关地址，"
+            "一般为 https://主机/…/v1 这类根路径，不要带 models/ 与 :generateContent。"
+        )
     if not u.endswith("/v1"):
         u = u + "/v1"
     return u
