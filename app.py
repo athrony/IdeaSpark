@@ -94,6 +94,28 @@ def _flatten_groups(boxes: list[dict]) -> list[str]:
     return out
 
 
+def _relay_kwargs_for_batch() -> dict[str, str | None]:
+    """侧栏 session 与 Secrets/.env 合并，供批量评审显式传入（避免仅依赖 os.environ 时序）。"""
+    rb = (st.session_state.get("relay_base_url_input") or "").strip()
+    if not rb:
+        rb = (os.environ.get("GEMINI_RELAY_BASE_URL") or "").strip()
+    rk = (st.session_state.get("relay_api_key_input") or "").strip()
+    if not rk:
+        rk = (
+            os.environ.get("GEMINI_RELAY_API_KEY")
+            or os.environ.get("GOOGLE_API_KEY")
+            or ""
+        ).strip()
+    rm = (st.session_state.get("relay_model_input") or "").strip()
+    if not rm:
+        rm = (os.environ.get("GEMINI_RELAY_MODEL") or "Gemini 3.1 Flash-Lite").strip()
+    return {
+        "relay_base_url": rb or None,
+        "relay_api_key": rk or None,
+        "relay_model": rm or None,
+    }
+
+
 def main() -> None:
     st.title("✨ IdeaSpark")
     st.caption(
@@ -151,26 +173,41 @@ def main() -> None:
             st.markdown(
                 "中转说明见 [魔芋 AI 文档](http://101.200.167.88:8001/#text-gemini)（一般为 OpenAI 兼容 `…/v1/chat/completions`）。"
             )
-            relay_base = st.text_input(
+            if "relay_base_url_input" not in st.session_state:
+                st.session_state.relay_base_url_input = os.environ.get(
+                    "GEMINI_RELAY_BASE_URL", ""
+                )
+            if "relay_api_key_input" not in st.session_state:
+                st.session_state.relay_api_key_input = os.environ.get(
+                    "GEMINI_RELAY_API_KEY", os.environ.get("GOOGLE_API_KEY", "")
+                )
+            if "relay_model_input" not in st.session_state:
+                st.session_state.relay_model_input = os.environ.get(
+                    "GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite"
+                )
+            st.text_input(
                 "中转 Base URL",
-                value=os.environ.get("GEMINI_RELAY_BASE_URL", ""),
                 placeholder="http://101.200.167.88:8001/v1",
                 help="需包含 /v1；若只填到端口会自动补 /v1。",
+                key="relay_base_url_input",
             )
-            relay_key = st.text_input(
+            st.text_input(
                 "中转 API Key",
                 type="password",
-                value=os.environ.get("GEMINI_RELAY_API_KEY", os.environ.get("GOOGLE_API_KEY", "")),
+                key="relay_api_key_input",
             )
-            relay_model = st.text_input(
+            st.text_input(
                 "中转模型名",
-                value=os.environ.get("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite"),
+                key="relay_model_input",
             )
-            if relay_base:
-                os.environ["GEMINI_RELAY_BASE_URL"] = relay_base.strip()
-            if relay_key:
-                os.environ["GEMINI_RELAY_API_KEY"] = relay_key
-            os.environ["GEMINI_RELAY_MODEL"] = relay_model.strip() or "Gemini 3.1 Flash-Lite"
+            rb = (st.session_state.relay_base_url_input or "").strip()
+            rk = (st.session_state.relay_api_key_input or "").strip()
+            rm = (st.session_state.relay_model_input or "").strip() or "Gemini 3.1 Flash-Lite"
+            if rb:
+                os.environ["GEMINI_RELAY_BASE_URL"] = rb
+            if rk:
+                os.environ["GEMINI_RELAY_API_KEY"] = rk
+            os.environ["GEMINI_RELAY_MODEL"] = rm
 
         auto_eval = st.checkbox("生成后自动评价第 1 条", value=False)
 
@@ -439,6 +476,14 @@ def main() -> None:
             with st.spinner("流水线运行中（可能需几十秒）…"):
                 all_kept: list = []
                 total_gen = 0
+                rkw: dict = {}
+                if prov == "relay":
+                    rkw = _relay_kwargs_for_batch()
+                    if not rkw.get("relay_base_url"):
+                        st.error(
+                            "中转模式需要填写侧栏「中转 Base URL」，或在 Streamlit Secrets / 环境变量中设置 GEMINI_RELAY_BASE_URL。"
+                        )
+                        st.stop()
                 for _ in range(int(pl_rounds)):
                     recipes = [
                         draw_recipe(
@@ -456,6 +501,7 @@ def main() -> None:
                         recipes,
                         prov,
                         chunk_size=int(pl_chunk),
+                        **rkw,
                     )
                     kept = merge_kept_results(
                         recipes,

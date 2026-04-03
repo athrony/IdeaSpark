@@ -26,7 +26,14 @@ def _build_batch_user_text(recipes: list[dict], start_id: int = 1) -> str:
     return f"共{len(recipes)}条：\n" + "\n".join(lines)
 
 
-def _chat_completion_batch(user_text: str, provider: str) -> str:
+def _chat_completion_batch(
+    user_text: str,
+    provider: str,
+    *,
+    relay_base_url: str | None = None,
+    relay_api_key: str | None = None,
+    relay_model: str | None = None,
+) -> str:
     p = (provider or "gemini").lower().strip()
     if p in ("openai", "relay", "gemini_relay", "gemini-relay", "中转"):
         from openai import OpenAI
@@ -38,15 +45,17 @@ def _chat_completion_batch(user_text: str, provider: str) -> str:
             client = OpenAI(api_key=key)
             model = env_str("OPENAI_MODEL", "gpt-4o-mini")
         else:
-            base = env_str("GEMINI_RELAY_BASE_URL")
+            base = (relay_base_url or env_str("GEMINI_RELAY_BASE_URL")).strip()
             if not base:
-                raise ValueError("中转模式需要 GEMINI_RELAY_BASE_URL")
+                raise ValueError(
+                    "中转模式需要填写「中转 Base URL」或在环境变量中设置 GEMINI_RELAY_BASE_URL。"
+                )
             base = _normalize_relay_base_url(base)
-            key = env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")
+            key = (relay_api_key or env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")).strip()
             if not key:
-                raise ValueError("请设置 GEMINI_RELAY_API_KEY 或 GOOGLE_API_KEY")
+                raise ValueError("请设置中转 API Key，或填写 GOOGLE_API_KEY 作为备用。")
+            model = (relay_model or env_str("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite")).strip()
             client = OpenAI(api_key=key, base_url=base)
-            model = env_str("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite")
 
         completion = client.chat.completions.create(
             model=model,
@@ -113,10 +122,14 @@ def evaluate_batch(
     provider: str,
     *,
     chunk_size: int = 36,
+    relay_base_url: str | None = None,
+    relay_api_key: str | None = None,
+    relay_model: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """
     返回 (解析后的 items 列表, 原始拼接文本)。
     超长时按 chunk 切块多次请求，id 仍用全局编号。
+    中转模式可传入 relay_* 显式覆盖环境变量（与侧栏 session 对齐）。
     """
     if not recipes:
         return [], ""
@@ -128,7 +141,13 @@ def evaluate_batch(
         chunk = recipes[start : start + chunk_size]
         start_id = start + 1
         user_text = _build_batch_user_text(chunk, start_id=start_id)
-        raw = _chat_completion_batch(user_text, provider)
+        raw = _chat_completion_batch(
+            user_text,
+            provider,
+            relay_base_url=relay_base_url,
+            relay_api_key=relay_api_key,
+            relay_model=relay_model,
+        )
         raw_chunks.append(raw)
         items = parse_batch_items(raw)
         all_items.extend(items)
