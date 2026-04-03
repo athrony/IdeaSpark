@@ -44,6 +44,7 @@ st.set_page_config(
 _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
+from ideaspark.cartesian import sample_cartesian_recipes
 from ideaspark.combinator import draw_recipe, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
@@ -55,10 +56,33 @@ def _is_excellent(ev: EvaluationResult) -> bool:
     return ev.average_score > 8.0
 
 
+def _sync_group_boxes(keys: list[str]) -> None:
+    """类别增删时同步两组拖拽容器。"""
+    sig = tuple(keys)
+    if st.session_state.get("_cat_sig") != sig:
+        mid = (len(keys) + 1) // 2
+        st.session_state.grp_boxes = [
+            {"header": "组 1 · 落地/优先", "items": list(keys[:mid])},
+            {"header": "组 2 · 文艺/实验", "items": list(keys[mid:])},
+        ]
+        st.session_state._cat_sig = sig
+
+
+def _flatten_groups(boxes: list[dict]) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for b in boxes:
+        for it in b.get("items", []):
+            if it not in seen:
+                seen.add(it)
+                out.append(it)
+    return out
+
+
 def main() -> None:
     st.title("✨ IdeaSpark")
     st.caption(
-        "创意生成引擎 · 10 维词库（技术/价值/主体/心理 + 叙事·文体·意象·媒介·美学·互文）· 随机组合 · AI 评价 · 本地存档"
+        "创意生成引擎 · 锚点 / 关联度 / 维度拖拽分组 · 笛卡尔积抽样 · AI 评价 · 本地存档"
     )
 
     if "categories" not in st.session_state:
@@ -150,11 +174,111 @@ def main() -> None:
             )
         combo_mode = _combo_labels[combo_label]
 
-        gen = st.button("🎲 生成创意配方", type="primary", use_container_width=True)
+        cat_keys = list(cats.keys())
+        _sync_group_boxes(cat_keys)
+
+        st.markdown("**行业锚点 · 关联度**")
+        hb1, hb2, hb3, hb4 = st.columns([1.1, 1.8, 1.6, 2.2])
+        with hb1:
+            gen = st.button("🎲 生成创意配方", type="primary", use_container_width=True)
+        with hb2:
+            anchor_word = st.text_input(
+                "行业锚点（必选词）",
+                key="anchor_word_input",
+                placeholder="如：金融交易",
+                help="指定后首槽固定为该词；可填词库外自定义词。留空则不锁定首词。",
+            )
+        with hb3:
+            anchor_opts = ["（不使用锚点）"] + cat_keys
+            _ai = 0
+            if "行业" in anchor_opts:
+                _ai = anchor_opts.index("行业")
+            anchor_pick = st.selectbox(
+                "锚点维度",
+                options=anchor_opts,
+                index=_ai,
+                help="首槽使用的维度；与锚点词一起构成必选组合。",
+            )
+        with hb4:
+            correlation = st.slider(
+                "关联度",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.45,
+                step=0.05,
+                help="低：混沌狂想（全维度均匀随机）。高：商业模式（优先行业/技术/人群/心理，并按下方拖拽顺序加权）。",
+            )
+
+        with st.expander("维度分组（拖拽排序 · 可跨组拖动）", expanded=False):
+            try:
+                from streamlit_sortables import sort_items
+
+                st.session_state.grp_boxes = sort_items(
+                    st.session_state.grp_boxes,
+                    multi_containers=True,
+                )
+                st.session_state.dim_order = _flatten_groups(st.session_state.grp_boxes)
+            except Exception as e:
+                st.warning(f"拖拽组件不可用（{e}），已回退为列表优先级。")
+                st.session_state.dim_order = st.multiselect(
+                    "维度优先级（靠前优先，用于高关联度加权）",
+                    options=cat_keys,
+                    default=st.session_state.get("dim_order") or cat_keys,
+                    key="dim_order_fallback",
+                )
+
+        with st.expander("笛卡尔积 · 随机种子抽样", expanded=False):
+            st.caption(
+                "选定若干维度，各维截取最多 N 个词后做笛卡尔积；空间过大时以种子做随机抽样（尽量不重复）。"
+            )
+            cp_dims = st.multiselect(
+                "参与维度（顺序保留）",
+                options=cat_keys,
+                default=cat_keys[: min(3, len(cat_keys))],
+                key="cp_dims",
+            )
+            cp1, cp2, cp3, cp4 = st.columns(4)
+            with cp1:
+                cp_cap = st.number_input("每维最多词数", 2, 120, 18, key="cp_cap")
+            with cp2:
+                cp_n = st.number_input("抽样条数", 1, 500, 40, key="cp_n")
+            with cp3:
+                cp_seed = st.number_input("随机种子", 0, 2**31 - 1, 2026, key="cp_seed")
+            with cp4:
+                st.write("")
+                cp_go = st.button("生成笛卡尔样本", key="cp_go")
+
+            if cp_go:
+                if len(cp_dims) < 2:
+                    st.error("请至少选择 2 个维度。")
+                else:
+                    st.session_state.pop("pick_recipe_idx", None)
+                    st.session_state.last_recipes = sample_cartesian_recipes(
+                        st.session_state.categories,
+                        cp_dims,
+                        int(cp_cap),
+                        int(cp_n),
+                        int(cp_seed),
+                        combo_label=f"笛卡尔·种子{cp_seed}",
+                    )
+                    st.session_state.evaluations = {}
+                    st.session_state.pop("eval_error", None)
+                    st.rerun()
+
         if gen:
             st.session_state.pop("pick_recipe_idx", None)
+            acat = None if anchor_pick == "（不使用锚点）" else anchor_pick
+            aw_raw = (anchor_word or "").strip()
+            dim_order = st.session_state.get("dim_order") or cat_keys
             recipes = [
-                draw_recipe(st.session_state.categories, combo_mode=combo_mode)
+                draw_recipe(
+                    st.session_state.categories,
+                    combo_mode=combo_mode,
+                    correlation=float(correlation),
+                    anchor_category=acat,
+                    anchor_word=aw_raw if aw_raw else None,
+                    category_order=dim_order,
+                )
                 for _ in range(int(batch_n))
             ]
             st.session_state.last_recipes = recipes
