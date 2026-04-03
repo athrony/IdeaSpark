@@ -28,6 +28,9 @@ def _merge_streamlit_secrets() -> None:
             "AI_PROVIDER",
             "GEMINI_MODEL",
             "OPENAI_MODEL",
+            "GEMINI_RELAY_BASE_URL",
+            "GEMINI_RELAY_API_KEY",
+            "GEMINI_RELAY_MODEL",
         ):
             if key in st.secrets:
                 os.environ[key] = str(st.secrets[key])
@@ -68,6 +71,15 @@ def _sync_group_boxes(keys: list[str]) -> None:
         st.session_state._cat_sig = sig
 
 
+def _provider_radio_index() -> int:
+    p = ai_provider()
+    if p in ("relay", "gemini_relay", "gemini-relay"):
+        return 1
+    if p == "openai":
+        return 2
+    return 0
+
+
 def _flatten_groups(boxes: list[dict]) -> list[str]:
     seen: set[str] = set()
     out: list[str] = []
@@ -98,8 +110,13 @@ def main() -> None:
         st.subheader("AI 设置")
         prov = st.radio(
             "API 提供商",
-            options=["gemini", "openai"],
-            index=0 if ai_provider() != "openai" else 1,
+            options=["gemini", "relay", "openai"],
+            index=_provider_radio_index(),
+            format_func=lambda x: {
+                "gemini": "Gemini 官方直连",
+                "relay": "中转 API（Gemini / OpenAI 兼容）",
+                "openai": "OpenAI 官方",
+            }[x],
             horizontal=True,
         )
         os.environ["AI_PROVIDER"] = prov
@@ -113,15 +130,42 @@ def main() -> None:
             os.environ["OPENAI_API_KEY"] = ok
 
         gem_m = st.text_input(
-            "Gemini 模型",
+            "Gemini 模型（官方直连）",
             value=os.environ.get("GEMINI_MODEL", "gemini-2.0-flash"),
+            disabled=(prov != "gemini"),
         )
         oa_m = st.text_input(
             "OpenAI 模型",
             value=os.environ.get("OPENAI_MODEL", "gpt-4o-mini"),
+            disabled=(prov != "openai"),
         )
         os.environ["GEMINI_MODEL"] = gem_m
         os.environ["OPENAI_MODEL"] = oa_m
+
+        if prov == "relay":
+            st.markdown(
+                "中转说明见 [魔芋 AI 文档](http://101.200.167.88:8001/#text-gemini)（一般为 OpenAI 兼容 `…/v1/chat/completions`）。"
+            )
+            relay_base = st.text_input(
+                "中转 Base URL",
+                value=os.environ.get("GEMINI_RELAY_BASE_URL", ""),
+                placeholder="http://101.200.167.88:8001/v1",
+                help="需包含 /v1；若只填到端口会自动补 /v1。",
+            )
+            relay_key = st.text_input(
+                "中转 API Key",
+                type="password",
+                value=os.environ.get("GEMINI_RELAY_API_KEY", os.environ.get("GOOGLE_API_KEY", "")),
+            )
+            relay_model = st.text_input(
+                "中转模型名",
+                value=os.environ.get("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite"),
+            )
+            if relay_base:
+                os.environ["GEMINI_RELAY_BASE_URL"] = relay_base.strip()
+            if relay_key:
+                os.environ["GEMINI_RELAY_API_KEY"] = relay_key
+            os.environ["GEMINI_RELAY_MODEL"] = relay_model.strip() or "Gemini 3.1 Flash-Lite"
 
         auto_eval = st.checkbox("生成后自动评价第 1 条", value=False)
 

@@ -92,6 +92,48 @@ def evaluate_with_gemini(recipe_summary: str) -> EvaluationResult:
     return parse_evaluation(text)
 
 
+def _normalize_relay_base_url(url: str) -> str:
+    """OpenAI SDK 需要 base_url 以 /v1 结尾（不含具体路径）。"""
+    u = url.strip().rstrip("/")
+    if not u.endswith("/v1"):
+        u = u + "/v1"
+    return u
+
+
+def evaluate_with_gemini_relay(recipe_summary: str) -> EvaluationResult:
+    """
+    中转站：通常为 OpenAI Chat Completions 兼容接口。
+    文档示例：魔芋 AI — http://101.200.167.88:8001/#text-gemini
+    环境变量：GEMINI_RELAY_BASE_URL、GEMINI_RELAY_API_KEY（或回退 GOOGLE_API_KEY）、GEMINI_RELAY_MODEL。
+    """
+    from openai import OpenAI
+
+    base = env_str("GEMINI_RELAY_BASE_URL")
+    if not base:
+        raise ValueError(
+            "中转模式需要 GEMINI_RELAY_BASE_URL（多为 http(s)://主机:端口/v1，详见中转商文档）。"
+        )
+    base = _normalize_relay_base_url(base)
+    key = env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")
+    if not key:
+        raise ValueError("请设置 GEMINI_RELAY_API_KEY，或在未单独配置时填写 GOOGLE_API_KEY。")
+
+    model = env_str("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite")
+    client = OpenAI(api_key=key, base_url=base)
+    completion = client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": f"创意配方：{recipe_summary}"},
+        ],
+        temperature=0.6,
+    )
+    text = (completion.choices[0].message.content or "").strip()
+    if not text:
+        raise RuntimeError("中转 API 返回为空")
+    return parse_evaluation(text)
+
+
 def evaluate_with_openai(recipe_summary: str) -> EvaluationResult:
     from openai import OpenAI
 
@@ -116,7 +158,9 @@ def evaluate_with_openai(recipe_summary: str) -> EvaluationResult:
 
 
 def evaluate(recipe_summary: str, provider: str) -> EvaluationResult:
-    p = (provider or "gemini").lower()
+    p = (provider or "gemini").lower().strip()
     if p == "openai":
         return evaluate_with_openai(recipe_summary)
+    if p in ("relay", "gemini_relay", "gemini-relay", "中转"):
+        return evaluate_with_gemini_relay(recipe_summary)
     return evaluate_with_gemini(recipe_summary)
