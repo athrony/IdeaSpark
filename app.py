@@ -31,6 +31,7 @@ def _merge_streamlit_secrets() -> None:
             "GEMINI_RELAY_BASE_URL",
             "GEMINI_RELAY_API_KEY",
             "GEMINI_RELAY_MODEL",
+            "WEBHOOK_URL",
         ):
             if key in st.secrets:
                 os.environ[key] = str(st.secrets[key])
@@ -47,6 +48,8 @@ st.set_page_config(
 _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
+from ideaspark.batch_evaluator import evaluate_batch, merge_kept_results
+from ideaspark.webhook_notify import build_batch_payload, post_json_webhook
 from ideaspark.cartesian import sample_cartesian_recipes
 from ideaspark.combinator import draw_recipe, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
@@ -103,6 +106,8 @@ def main() -> None:
         st.session_state.last_recipes = []
     if "evaluations" not in st.session_state:
         st.session_state.evaluations = {}
+    if "pipeline_kept" not in st.session_state:
+        st.session_state.pipeline_kept = []
 
     init_db()
 
@@ -201,10 +206,11 @@ def main() -> None:
         }
         row1, row2 = st.columns([3, 2])
         with row1:
-            combo_label = st.selectbox(
+            st.selectbox(
                 "组合方式",
                 options=list(_combo_labels.keys()),
                 index=0,
+                key="idea_combo_label",
                 help="每一「词槽」独立随机选一类再选一词；同类可重复出现（如 技术+技术）。同一类内尽量抽不同词，词不够时才重复。",
             )
         with row2:
@@ -214,9 +220,11 @@ def main() -> None:
                 max_value=50,
                 value=5,
                 step=1,
+                key="idea_batch_n",
                 help="一次点击可生成多条互不相同的随机配方，便于快速浏览与筛选。",
             )
-        combo_mode = _combo_labels[combo_label]
+        _ck = st.session_state.get("idea_combo_label") or list(_combo_labels.keys())[0]
+        combo_mode = _combo_labels[_ck]
 
         cat_keys = list(cats.keys())
         _sync_group_boxes(cat_keys)
@@ -234,13 +242,17 @@ def main() -> None:
             )
         with hb3:
             anchor_opts = ["（不使用锚点）"] + cat_keys
-            _ai = 0
-            if "行业" in anchor_opts:
-                _ai = anchor_opts.index("行业")
+            if (
+                "idea_anchor_pick" not in st.session_state
+                or st.session_state.idea_anchor_pick not in anchor_opts
+            ):
+                st.session_state.idea_anchor_pick = (
+                    "行业" if "行业" in anchor_opts else anchor_opts[0]
+                )
             anchor_pick = st.selectbox(
                 "锚点维度",
                 options=anchor_opts,
-                index=_ai,
+                key="idea_anchor_pick",
                 help="首槽使用的维度；与锚点词一起构成必选组合。",
             )
         with hb4:
@@ -250,6 +262,7 @@ def main() -> None:
                 max_value=1.0,
                 value=0.45,
                 step=0.05,
+                key="idea_correlation",
                 help="低：混沌狂想（全维度均匀随机）。高：商业模式（优先行业/技术/人群/心理，并按下方拖拽顺序加权）。",
             )
 
@@ -375,6 +388,130 @@ def main() -> None:
             if err:
                 st.error(f"自动评价失败：{err}")
                 st.session_state.pop("eval_error", None)
+
+        st.divider()
+        st.subheader("批量流水线（省 Token · 一次评审多条）")
+        st.caption(
+            "同一请求内用「编号|摘要」紧凑输入，模型只返回 JSON 列表，无意义配方标为 drop，不展开长评。"
+        )
+        pq1, pq2, pq3, pq4 = st.columns(4)
+        with pq1:
+            pl_count = st.number_input("每轮生成条数", 5, 100, 50, key="pl_count")
+        with pq2:
+            pl_rounds = st.number_input("循环轮数", 1, 20, 1, key="pl_rounds")
+        with pq3:
+            pl_min = st.slider("最低平均分", 0.0, 10.0, 6.0, 0.5, key="pl_min")
+        with pq4:
+            pl_chunk = st.number_input("每批评审条数（切块）", 8, 60, 36, key="pl_chunk")
+        pl_ex_weak = st.checkbox("筛掉 weak（仅保留 ok/good）", value=False, key="pl_ex_weak")
+        wh_url = st.text_input(
+            "Webhook URL（可选，POST application/json）",
+            value=os.environ.get("WEBHOOK_URL", ""),
+            key="webhook_url_input",
+            help="将筛选后的条目以 JSON 推送到你的服务；可由中间层转发到飞书/企微/钉钉等。",
+        )
+        if wh_url.strip():
+            os.environ["WEBHOOK_URL"] = wh_url.strip()
+
+        pr1, pr2 = st.columns(2)
+        with pr1:
+            run_pl = st.button(
+                "一键：生成 → 批量评审 → 筛选",
+                type="primary",
+                use_container_width=True,
+                key="run_pipeline",
+            )
+        with pr2:
+            push_wh = st.button(
+                "推送上次筛选结果到 Webhook",
+                use_container_width=True,
+                key="push_webhook",
+            )
+
+        if run_pl:
+            dim_order = st.session_state.get("dim_order") or cat_keys
+            ck = st.session_state.get("idea_combo_label") or list(_combo_labels.keys())[0]
+            combo_m = _combo_labels[ck]
+            corr = float(st.session_state.get("idea_correlation", 0.45))
+            ap = st.session_state.get("idea_anchor_pick", "（不使用锚点）")
+            acat = None if ap == "（不使用锚点）" else ap
+            aw_raw = (st.session_state.get("anchor_word_input") or "").strip()
+            with st.spinner("流水线运行中（可能需几十秒）…"):
+                all_kept: list = []
+                total_gen = 0
+                for _ in range(int(pl_rounds)):
+                    recipes = [
+                        draw_recipe(
+                            st.session_state.categories,
+                            combo_mode=combo_m,
+                            correlation=corr,
+                            anchor_category=acat,
+                            anchor_word=aw_raw if aw_raw else None,
+                            category_order=dim_order,
+                        )
+                        for _ in range(int(pl_count))
+                    ]
+                    total_gen += len(recipes)
+                    items, _raw = evaluate_batch(
+                        recipes,
+                        prov,
+                        chunk_size=int(pl_chunk),
+                    )
+                    kept = merge_kept_results(
+                        recipes,
+                        items,
+                        min_avg=float(pl_min),
+                        exclude_weak=bool(pl_ex_weak),
+                    )
+                    all_kept.extend(kept)
+                st.session_state.pipeline_kept = all_kept
+                st.session_state.pipeline_meta = {
+                    "generated": total_gen,
+                    "rounds": int(pl_rounds),
+                    "kept": len(all_kept),
+                }
+            st.success(
+                f"完成：共生成 {total_gen} 条，筛选保留 {len(all_kept)} 条（可继续推 Webhook）。"
+            )
+
+        if push_wh and st.session_state.pipeline_kept:
+            meta = st.session_state.get("pipeline_meta") or {}
+            payload = build_batch_payload(
+                st.session_state.pipeline_kept,
+                title="IdeaSpark 批量评审",
+                rounds=int(meta.get("rounds", 1)),
+                generated=int(meta.get("generated", 0)),
+            )
+            url = (os.environ.get("WEBHOOK_URL") or "").strip()
+            if not url:
+                st.error("请先填写 Webhook URL。")
+            else:
+                ok, msg = post_json_webhook(url, payload)
+                if ok:
+                    st.success(f"已推送：{msg}")
+                else:
+                    st.error(f"推送失败：{msg}")
+
+        pk = st.session_state.get("pipeline_kept") or []
+        if pk:
+            st.markdown("**上次流水线筛选结果**")
+            st.dataframe(
+                [
+                    {
+                        "id": x["id"],
+                        "tier": x["tier"],
+                        "avg": x["avg"],
+                        "mp": x["mp"],
+                        "tf": x["tf"],
+                        "ib": x["ib"],
+                        "摘要": x["summary"],
+                        "点评": x.get("comment", ""),
+                    }
+                    for x in pk
+                ],
+                use_container_width=True,
+                hide_index=True,
+            )
 
     with col_side:
         st.subheader("AI 评价与存档")
