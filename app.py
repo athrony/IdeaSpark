@@ -513,10 +513,16 @@ def main() -> None:
             "Webhook URL（可选，POST application/json）",
             value=os.environ.get("WEBHOOK_URL", ""),
             key="webhook_url_input",
-            help="将筛选后的条目以 JSON 推送到你的服务；可由中间层转发到飞书/企微/钉钉等。",
+            help="本应用发送的是 IdeaSpark 自定义 JSON（见下方说明）。"
+            "飞书/企微/钉钉机器人通常要求固定字段，需自建转发或 n8n 把 body 映射成对方格式；"
+            "仅填官方机器人 URL 常会出现 HTTP 200 但群里收不到。",
         )
         if wh_url.strip():
             os.environ["WEBHOOK_URL"] = wh_url.strip()
+        st.caption(
+            "若提示已推送且 HTTP 200 但群里仍无消息：多为机器人 URL 要求固定 JSON（如飞书 `msg_type`），"
+            "IdeaSpark 的通用结构不会被自动转成群消息；推送成功后的「响应正文」里若有 errcode/msg 可判断原因。"
+        )
 
         pr1, pr2 = st.columns(2)
         with pr1:
