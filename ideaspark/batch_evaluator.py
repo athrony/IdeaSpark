@@ -113,7 +113,7 @@ def _chat_completion_batch(
             key = env_str("OPENAI_API_KEY")
             if not key:
                 raise ValueError("未设置 OPENAI_API_KEY")
-            client = OpenAI(api_key=key)
+            client = OpenAI(api_key=key, timeout=180.0)
             model = env_str("OPENAI_MODEL", "gpt-4o-mini")
         else:
             base = (relay_base_url or env_str("GEMINI_RELAY_BASE_URL")).strip()
@@ -126,7 +126,7 @@ def _chat_completion_batch(
             if not key:
                 raise ValueError("请设置中转 API Key，或填写 GOOGLE_API_KEY 作为备用。")
             model = (relay_model or env_str("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite")).strip()
-            client = OpenAI(api_key=key, base_url=base)
+            client = OpenAI(api_key=key, base_url=base, timeout=180.0)
 
         completion = _openai_chat_create_with_retry(
             client,
@@ -189,6 +189,75 @@ def _clamp_score(v: Any) -> int:
         return 0
 
 
+def _should_bisect_chunk_on_error(msg: str) -> bool:
+    """对端过载、单次过长、限流等可尝试拆半重试；客户端错误（4xx 配置问题）不拆。"""
+    if not msg:
+        return False
+    if any(
+        x in msg
+        for x in ("状态 401", "状态 404", "状态 400", "密钥无效", "地址或模型不存在")
+    ):
+        return False
+    if "5xx" in msg or "服务端" in msg or "服务器内部" in msg:
+        return True
+    if "超时" in msg or "无法连接" in msg:
+        return True
+    if "429" in msg or "限流" in msg:
+        return True
+    return False
+
+
+def _evaluate_chunk_with_bisect(
+    chunk: list[dict],
+    start_id: int,
+    provider: str,
+    *,
+    relay_base_url: str | None,
+    relay_api_key: str | None,
+    relay_model: str | None,
+    depth: int = 0,
+) -> tuple[str, list[dict[str, Any]]]:
+    """
+    单次批量请求；若返回服务端/限流/超时类 ValueError，则将当前块拆成两半递归重试（最多拆到单条）。
+    """
+    user_text = _build_batch_user_text(chunk, start_id=start_id)
+    try:
+        raw = _chat_completion_batch(
+            user_text,
+            provider,
+            relay_base_url=relay_base_url,
+            relay_api_key=relay_api_key,
+            relay_model=relay_model,
+        )
+        return raw, parse_batch_items(raw)
+    except ValueError as e:
+        msg = (e.args[0] if e.args else "") or ""
+        if depth >= 8 or len(chunk) <= 1 or not _should_bisect_chunk_on_error(msg):
+            raise
+        mid = len(chunk) // 2
+        if mid < 1:
+            raise
+        r1, items1 = _evaluate_chunk_with_bisect(
+            chunk[:mid],
+            start_id,
+            provider,
+            relay_base_url=relay_base_url,
+            relay_api_key=relay_api_key,
+            relay_model=relay_model,
+            depth=depth + 1,
+        )
+        r2, items2 = _evaluate_chunk_with_bisect(
+            chunk[mid:],
+            start_id + mid,
+            provider,
+            relay_base_url=relay_base_url,
+            relay_api_key=relay_api_key,
+            relay_model=relay_model,
+            depth=depth + 1,
+        )
+        return r1 + "\n---\n" + r2, items1 + items2
+
+
 def evaluate_batch(
     recipes: list[dict],
     provider: str,
@@ -212,16 +281,15 @@ def evaluate_batch(
     for start in range(0, len(recipes), chunk_size):
         chunk = recipes[start : start + chunk_size]
         start_id = start + 1
-        user_text = _build_batch_user_text(chunk, start_id=start_id)
-        raw = _chat_completion_batch(
-            user_text,
+        raw, items = _evaluate_chunk_with_bisect(
+            chunk,
+            start_id,
             provider,
             relay_base_url=relay_base_url,
             relay_api_key=relay_api_key,
             relay_model=relay_model,
         )
         raw_chunks.append(raw)
-        items = parse_batch_items(raw)
         all_items.extend(items)
 
     return all_items, "\n---\n".join(raw_chunks)
