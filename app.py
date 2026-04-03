@@ -57,7 +57,7 @@ def _is_excellent(ev: EvaluationResult) -> bool:
 
 def main() -> None:
     st.title("✨ IdeaSpark")
-    st.caption("创意生成引擎 · 词库随机组合 · AI 多维度评分 · 本地存档")
+    st.caption("创意生成引擎 · 本源词库（第一性原理取向）· 随机组合 · AI 多维度评分 · 本地存档")
 
     if "categories" not in st.session_state:
         st.session_state.categories = load_categories()
@@ -169,14 +169,37 @@ def main() -> None:
         recipes = st.session_state.last_recipes
         if recipes:
             st.subheader(f"本批配方（共 {len(recipes)} 条）")
+            overview_rows = [
+                {
+                    "序号": i + 1,
+                    "词数": r.get("word_count", len(r.get("parts", {}))),
+                    "组合": r.get("combo_mode", ""),
+                    "一行摘要": r["summary"],
+                }
+                for i, r in enumerate(recipes)
+            ]
+            st.dataframe(
+                overview_rows,
+                use_container_width=True,
+                hide_index=True,
+                height=min(520, 48 + 38 * len(recipes)),
+            )
+
+            st.markdown("**维度展开（逐条平铺，无需点开）**")
             for i, r in enumerate(recipes):
                 wc = r.get("word_count", len(r.get("parts", {})))
                 cm = r.get("combo_mode", "")
-                title = f"第 {i + 1} 条 · {wc} 词 · {cm}"
-                with st.expander(title, expanded=(len(recipes) <= 3)):
-                    for k, v in r["parts"].items():
-                        st.markdown(f"**{k}** · `{v}`")
-                    st.info(r["summary"])
+                with st.container(border=True):
+                    st.markdown(f"##### 第 {i + 1} 条 · {wc} 词 · {cm}")
+                    parts = list(r.get("parts", {}).items())
+                    if parts:
+                        n = len(parts)
+                        cols = st.columns(n)
+                        for j, (k, v) in enumerate(parts):
+                            with cols[j]:
+                                st.caption(k)
+                                st.markdown(f"**{v}**")
+                    st.markdown(f"`{r['summary']}`")
 
             err = st.session_state.get("eval_error")
             if err:
