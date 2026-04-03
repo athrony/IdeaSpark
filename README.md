@@ -47,6 +47,19 @@ IdeaSpark/
   requirements.txt
 ```
 
+## 推送到 GitHub
+
+本机已在 `Documents/IdeaSpark` 初始化 Git 并完成首次提交。若尚未安装 [GitHub CLI](https://cli.github.com/)，可在浏览器中新建空仓库后执行：
+
+```bash
+cd IdeaSpark
+git remote add origin https://github.com/<你的用户名>/IdeaSpark.git
+git branch -M main
+git push -u origin main
+```
+
+首次提交使用了仓库本地的占位作者信息，建议在仓库目录执行 `git config user.name` / `user.email` 改为你的信息，或使用 `git commit --amend --reset-author` 修正。
+
 ## 许可证
 
 MIT
