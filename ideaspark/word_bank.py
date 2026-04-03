@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -65,4 +66,84 @@ def add_word(categories: dict[str, list[str]], category: str, word: str) -> dict
         out[category] = []
     if w not in out[category]:
         out[category].append(w)
+    return out
+
+
+def parse_bulk_words(text: str, *, max_word_len: int = 80) -> list[str]:
+    """从粘贴文本解析词列表：换行、中英文逗号、顿号、分号分隔，去重保序。"""
+    if not (text or "").strip():
+        return []
+    parts = re.split(r"[\n\r,，、；;|]+", text.strip())
+    seen: set[str] = set()
+    out: list[str] = []
+    for p in parts:
+        w = p.strip()
+        if not w or len(w) > max_word_len:
+            continue
+        if w not in seen:
+            seen.add(w)
+            out.append(w)
+    return out
+
+
+def bulk_add_words(categories: dict[str, list[str]], category: str, text: str) -> dict[str, list[str]]:
+    """将批量文本合并到指定维度（去重）。"""
+    words = parse_bulk_words(text)
+    if not words:
+        return deepcopy(categories)
+    out = deepcopy(categories)
+    if category not in out:
+        out[category] = []
+    seen = set(out[category])
+    for w in words:
+        if w not in seen:
+            out[category].append(w)
+            seen.add(w)
+    return out
+
+
+def normalize_import_payload(data: Any) -> dict[str, list[str]]:
+    """解析上传 JSON：支持 {\"categories\":{...}} 或平铺 {维度: [词,...]}。"""
+    if not isinstance(data, dict):
+        return {}
+    root = data.get("categories") if "categories" in data else data
+    if not isinstance(root, dict):
+        return {}
+    out: dict[str, list[str]] = {}
+    for k, v in root.items():
+        if not isinstance(v, list):
+            continue
+        key = str(k).strip()
+        if not key:
+            continue
+        words = [str(x).strip() for x in v if str(x).strip()]
+        if words:
+            out[key] = words
+    return out
+
+
+def merge_categories_patch(
+    categories: dict[str, list[str]],
+    patch: dict[str, Any],
+) -> dict[str, list[str]]:
+    """
+    合并多维度补丁，如 {\"技术\": [\"a\",\"b\"], \"行业\": [\"c\"]}。
+    用于 JSON 文件导入。
+    """
+    out = deepcopy(categories)
+    if not isinstance(patch, dict):
+        return out
+    for cat, words in patch.items():
+        cat = str(cat).strip()
+        if not cat or not isinstance(words, list):
+            continue
+        if cat not in out:
+            out[cat] = []
+        seen = set(out[cat])
+        for w in words:
+            w = str(w).strip()
+            if not w or w in seen:
+                continue
+            out[cat].append(w)
+            seen.add(w)
     return out

@@ -4,6 +4,7 @@ IdeaSpark — Streamlit entry: word banks, random recipes, AI evaluation, persis
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sys
@@ -58,7 +59,15 @@ from ideaspark.cartesian import sample_cartesian_recipes
 from ideaspark.combinator import draw_recipe, recipe_nouns_join, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
-from ideaspark.word_bank import add_word, load_categories, save_categories
+from ideaspark.word_bank import (
+    add_word,
+    bulk_add_words,
+    load_categories,
+    merge_categories_patch,
+    normalize_import_payload,
+    parse_bulk_words,
+    save_categories,
+)
 
 
 def _is_excellent(ev: EvaluationResult) -> bool:
@@ -307,6 +316,79 @@ def main() -> None:
                         )
                         save_categories(st.session_state.categories)
                         st.rerun()
+
+        with st.expander("批量丰富词库（推荐：大量补充时用这个）", expanded=False):
+            st.markdown(
+                "**怎么攒词**：书籍目录/索引、白皮书术语表、竞品官网、论文关键词 → 整理成清单后整段粘贴。"
+                "\n\n**你可以帮我时**：发我**领域方向**（如「少儿科普硬件」）或**一小段目录/词表**，"
+                "我可按当前十个维度给出**候选词草稿**，你再筛选后粘贴进下方。"
+                "\n\n**版权**：只用你有权使用的材料；全书 OCR 不宜，目录与关键词更安全。"
+                "\n\n**与任意大模型配合**：提示「按维度 `技术/行业/人群/心理需求/叙事…` 各生成 20 个中文名词」，"
+                "导出后人工删改再合并。"
+            )
+            bc1, bc2 = st.columns(2)
+            with bc1:
+                bulk_dim = st.selectbox(
+                    "粘贴到维度",
+                    options=list(cats.keys()),
+                    key="bulk_import_dim",
+                )
+            with bc2:
+                st.caption("当前各维度词量")
+                st.caption(" · ".join(f"{k}:{len(cats[k])}" for k in cats.keys()))
+            bulk_area = st.text_area(
+                "词列表（每行一词，或逗号/顿号分隔）",
+                height=180,
+                key="bulk_import_text",
+                placeholder="语义检索\n向量数据库\n…\n或一行：词甲，词乙、词丙",
+            )
+            if st.button("合并到该维度", type="primary", key="bulk_import_apply"):
+                st.session_state.categories = bulk_add_words(
+                    st.session_state.categories,
+                    bulk_dim,
+                    bulk_area or "",
+                )
+                save_categories(st.session_state.categories)
+                n_in = len(parse_bulk_words(bulk_area or ""))
+                n_tot = len(st.session_state.categories.get(bulk_dim, []))
+                st.success(
+                    f"已解析 **{n_in}** 个词并合并进「{bulk_dim}」（该维度现共 **{n_tot}** 词）。"
+                )
+                st.rerun()
+
+            st.markdown("**多维度 JSON**（与 `data/word_bank.json` 结构兼容）")
+            up = st.file_uploader("上传 .json 合并", type=["json"], key="bulk_json_upload")
+            if st.button("合并上传的 JSON", key="bulk_json_merge"):
+                if up is None:
+                    st.error("请先选择 JSON 文件。")
+                else:
+                    try:
+                        raw = json.load(up)
+                    except json.JSONDecodeError as e:
+                        st.error(f"JSON 解析失败：{e}")
+                    else:
+                        patch = normalize_import_payload(raw)
+                        if not patch:
+                            st.error('未识别到有效内容。支持 {"categories":{...}} 或 {"技术":[...]}。')
+                        else:
+                            st.session_state.categories = merge_categories_patch(
+                                st.session_state.categories,
+                                patch,
+                            )
+                            save_categories(st.session_state.categories)
+                            st.success(
+                                "已合并："
+                                + " · ".join(f"{k}（+{len(v)} 词）" for k, v in patch.items())
+                            )
+                            st.rerun()
+            tpl = {"categories": {k: [] for k in cats.keys()}}
+            st.download_button(
+                "下载空模板 JSON",
+                data=json.dumps(tpl, ensure_ascii=False, indent=2),
+                file_name="word_bank_template.json",
+                mime="application/json",
+                key="bulk_dl_template",
+            )
 
         st.divider()
         _combo_labels: dict[str, str | int] = {
