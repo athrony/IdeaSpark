@@ -18,8 +18,8 @@ load_dotenv(_ROOT / ".env")
 def _merge_streamlit_secrets() -> None:
     try:
         for key in (
-            "OPENAI_API_KEY",
             "GOOGLE_API_KEY",
+            "OPENAI_API_KEY",
             "AI_PROVIDER",
             "GEMINI_MODEL",
             "OPENAI_MODEL",
@@ -39,7 +39,7 @@ st.set_page_config(
 _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
-from ideaspark.combinator import draw_recipe
+from ideaspark.combinator import ComboMode, draw_recipe
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
 from ideaspark.word_bank import add_word, load_categories, save_categories
@@ -56,10 +56,10 @@ def main() -> None:
 
     if "categories" not in st.session_state:
         st.session_state.categories = load_categories()
-    if "last_recipe" not in st.session_state:
-        st.session_state.last_recipe = None
-    if "last_eval" not in st.session_state:
-        st.session_state.last_eval = None
+    if "last_recipes" not in st.session_state:
+        st.session_state.last_recipes = []
+    if "evaluations" not in st.session_state:
+        st.session_state.evaluations = {}
 
     init_db()
 
@@ -92,7 +92,7 @@ def main() -> None:
         os.environ["GEMINI_MODEL"] = gem_m
         os.environ["OPENAI_MODEL"] = oa_m
 
-        auto_eval = st.checkbox("生成配方后自动调用 AI 评价", value=False)
+        auto_eval = st.checkbox("生成后自动评价第 1 条", value=False)
 
     col_main, col_side = st.columns([2, 1], gap="large")
 
@@ -118,84 +118,131 @@ def main() -> None:
                         st.rerun()
 
         st.divider()
+        _combo_labels: dict[str, ComboMode] = {
+            "随机 (2–4 词，维度随机)": "random",
+            "2 词（两维度碰撞）": 2,
+            "3 词（三维度碰撞）": 3,
+            "4 词（全维度）": 4,
+        }
+        row1, row2 = st.columns([3, 2])
+        with row1:
+            combo_label = st.selectbox(
+                "组合方式",
+                options=list(_combo_labels.keys()),
+                index=0,
+                help="从四类词库中随机抽取若干维度，每维随机一词；词数越少碰撞越尖锐，越多上下文越完整。",
+            )
+        with row2:
+            batch_n = st.number_input(
+                "本批生成数量",
+                min_value=1,
+                max_value=50,
+                value=5,
+                step=1,
+                help="一次点击可生成多条互不相同的随机配方，便于快速浏览与筛选。",
+            )
+        combo_mode = _combo_labels[combo_label]
+
         gen = st.button("🎲 生成创意配方", type="primary", use_container_width=True)
         if gen:
-            recipe = draw_recipe(st.session_state.categories)
-            st.session_state.last_recipe = recipe
-            st.session_state.last_eval = None
-            if auto_eval:
+            st.session_state.pop("pick_recipe_idx", None)
+            recipes = [
+                draw_recipe(st.session_state.categories, combo_mode=combo_mode)
+                for _ in range(int(batch_n))
+            ]
+            st.session_state.last_recipes = recipes
+            st.session_state.evaluations = {}
+            if auto_eval and recipes:
                 try:
-                    st.session_state.last_eval = evaluate(recipe["summary"], prov)
+                    st.session_state.evaluations[0] = evaluate(recipes[0]["summary"], prov)
                 except Exception as e:
                     st.session_state.eval_error = str(e)
             else:
                 st.session_state.pop("eval_error", None)
             st.rerun()
 
-        if st.session_state.last_recipe:
-            r = st.session_state.last_recipe
-            st.subheader("当前配方")
-            for k, v in r["parts"].items():
-                st.markdown(f"**{k}** · `{v}`")
-            st.info(r["summary"])
+        recipes = st.session_state.last_recipes
+        if recipes:
+            st.subheader(f"本批配方（共 {len(recipes)} 条）")
+            for i, r in enumerate(recipes):
+                wc = r.get("word_count", len(r.get("parts", {})))
+                cm = r.get("combo_mode", "")
+                title = f"第 {i + 1} 条 · {wc} 词 · {cm}"
+                with st.expander(title, expanded=(len(recipes) <= 3)):
+                    for k, v in r["parts"].items():
+                        st.markdown(f"**{k}** · `{v}`")
+                    st.info(r["summary"])
 
             err = st.session_state.get("eval_error")
             if err:
                 st.error(f"自动评价失败：{err}")
                 st.session_state.pop("eval_error", None)
 
-            if not auto_eval:
-                if st.button("发送 AI 评价", use_container_width=True):
-                    try:
-                        with st.spinner("正在请求 AI…"):
-                            st.session_state.last_eval = evaluate(r["summary"], prov)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(str(e))
-
     with col_side:
-        st.subheader("AI 评价")
-        ev = st.session_state.last_eval
-        if ev:
-            m1, m2, m3 = st.columns(3)
-            m1.metric("市场潜力", f"{ev.market_potential}/10")
-            m2.metric("技术可行性", f"{ev.technical_feasibility}/10")
-            m3.metric("创新突破点", f"{ev.innovation_breakthrough}/10")
-            st.caption(f"平均分：{ev.average_score:.2f}")
-            st.markdown("**商业初稿**")
-            st.write(ev.business_draft)
+        st.subheader("AI 评价与存档")
+        recipes = st.session_state.last_recipes
 
-            excellent = _is_excellent(ev)
-            if excellent:
-                st.success("已达到「优秀」标准（三项平均分 > 8），建议存档。")
+        pick = 0
+        if recipes:
+            pick = st.selectbox(
+                "评价 / 存档对象",
+                options=list(range(len(recipes))),
+                format_func=lambda i: f"第 {i + 1} 条 · {recipes[i]['summary'][:40]}…",
+                key="pick_recipe_idx",
+            )
+            cur = recipes[pick]
+            ev = st.session_state.evaluations.get(pick)
+
+            if st.button("对所选配方发送 AI 评价", use_container_width=True):
+                try:
+                    with st.spinner("正在请求 AI…"):
+                        st.session_state.evaluations[pick] = evaluate(cur["summary"], prov)
+                    st.rerun()
+                except Exception as e:
+                    st.error(str(e))
+
+            if ev:
+                m1, m2, m3 = st.columns(3)
+                m1.metric("市场潜力", f"{ev.market_potential}/10")
+                m2.metric("技术可行性", f"{ev.technical_feasibility}/10")
+                m3.metric("创新突破点", f"{ev.innovation_breakthrough}/10")
+                st.caption(f"平均分：{ev.average_score:.2f}")
+                st.markdown("**商业初稿**")
+                st.write(ev.business_draft)
+
+                excellent = _is_excellent(ev)
+                if excellent:
+                    st.success("已达到「优秀」标准（三项平均分 > 8），建议存档。")
+                else:
+                    st.info("未达「优秀」标准时仍可手动保存。")
+
+                ev_dict = {
+                    "market_potential": ev.market_potential,
+                    "technical_feasibility": ev.technical_feasibility,
+                    "innovation_breakthrough": ev.innovation_breakthrough,
+                    "business_draft": ev.business_draft,
+                }
+                s1, s2 = st.columns(2)
+                with s1:
+                    if st.button("保存到 Markdown", use_container_width=True, key="save_md"):
+                        path = save_to_markdown(
+                            cur["summary"],
+                            cur["parts"],
+                            ev_dict,
+                        )
+                        st.toast(f"已保存：{path.relative_to(ROOT)}")
+                with s2:
+                    if st.button("写入 SQLite", use_container_width=True, key="save_sql"):
+                        rid = save_to_sqlite(
+                            cur["summary"],
+                            cur["parts"],
+                            ev_dict,
+                        )
+                        st.toast(f"已写入数据库，id={rid}")
             else:
-                st.info("未达「优秀」标准时仍可手动保存。")
-
-            ev_dict = {
-                "market_potential": ev.market_potential,
-                "technical_feasibility": ev.technical_feasibility,
-                "innovation_breakthrough": ev.innovation_breakthrough,
-                "business_draft": ev.business_draft,
-            }
-            s1, s2 = st.columns(2)
-            with s1:
-                if st.button("保存到 Markdown", use_container_width=True):
-                    path = save_to_markdown(
-                        st.session_state.last_recipe["summary"],
-                        st.session_state.last_recipe["parts"],
-                        ev_dict,
-                    )
-                    st.toast(f"已保存：{path.relative_to(ROOT)}")
-            with s2:
-                if st.button("写入 SQLite", use_container_width=True):
-                    rid = save_to_sqlite(
-                        st.session_state.last_recipe["summary"],
-                        st.session_state.last_recipe["parts"],
-                        ev_dict,
-                    )
-                    st.toast(f"已写入数据库，id={rid}")
+                st.caption("选择一条配方并点击「发送 AI 评价」，或批量生成时勾选侧栏「生成后自动评价第 1 条」。")
         else:
-            st.write("生成配方并发起 AI 评价后，结果将显示在此处。")
+            st.write("生成配方后，在此选择条目进行评价与存档。")
 
         st.divider()
         st.subheader("最近存档（SQLite）")
