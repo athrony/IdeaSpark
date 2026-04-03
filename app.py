@@ -5,13 +5,18 @@ IdeaSpark — Streamlit entry: word banks, random recipes, AI evaluation, persis
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+# Streamlit Cloud / Linux: ensure repo root is importable (package folder `ideaspark/`)
+_ROOT = Path(__file__).resolve().parent
+_root_str = str(_ROOT)
+if _root_str not in sys.path:
+    sys.path.insert(0, _root_str)
 
 import streamlit as st
 from dotenv import load_dotenv
 
-# Load .env from project root before other imports use os.environ
-_ROOT = Path(__file__).resolve().parent
 load_dotenv(_ROOT / ".env")
 
 
@@ -39,7 +44,7 @@ st.set_page_config(
 _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
-from ideaspark.combinator import ComboMode, draw_recipe
+from ideaspark.combinator import draw_recipe
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
 from ideaspark.word_bank import add_word, load_categories, save_categories
@@ -118,7 +123,7 @@ def main() -> None:
                         st.rerun()
 
         st.divider()
-        _combo_labels: dict[str, ComboMode] = {
+        _combo_labels: dict[str, str | int] = {
             "随机 (2–4 词，维度随机)": "random",
             "2 词（两维度碰撞）": 2,
             "3 词（三维度碰撞）": 3,

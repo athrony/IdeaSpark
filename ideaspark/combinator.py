@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import random
-from typing import Literal, TypedDict
-
-ComboMode = Literal["random", 2, 3, 4]
+from typing import Any, TypedDict
 
 
 class Recipe(TypedDict):
@@ -19,7 +17,7 @@ def _non_empty_categories(categories: dict[str, list[str]]) -> list[str]:
     return [k for k, words in categories.items() if words]
 
 
-def _resolve_k(mode: ComboMode, num_cats: int) -> int:
+def _resolve_k(mode: Any, num_cats: int) -> int:
     """How many categories to sample (words in the recipe)."""
     if num_cats <= 0:
         return 0
@@ -37,7 +35,7 @@ def _resolve_k(mode: ComboMode, num_cats: int) -> int:
 
 def draw_recipe(
     categories: dict[str, list[str]],
-    combo_mode: ComboMode = "random",
+    combo_mode: Any = "random",
     seed: int | None = None,
 ) -> Recipe:
     if seed is not None:
@@ -46,12 +44,12 @@ def draw_recipe(
     names = _non_empty_categories(categories)
     k = _resolve_k(combo_mode, len(names))
     if k == 0:
-        return Recipe(
-            parts={},
-            summary="（请先在词库中补充词汇）",
-            word_count=0,
-            combo_mode=str(combo_mode),
-        )
+        return {
+            "parts": {},
+            "summary": "（请先在词库中补充词汇）",
+            "word_count": 0,
+            "combo_mode": str(combo_mode),
+        }
 
     picked = random.sample(names, k)
     random.shuffle(picked)
@@ -67,9 +65,9 @@ def draw_recipe(
         if combo_mode == "random"
         else f"{combo_mode}词组合"
     )
-    return Recipe(
-        parts=parts,
-        summary=summary,
-        word_count=len(parts),
-        combo_mode=mode_label,
-    )
+    return {
+        "parts": parts,
+        "summary": summary,
+        "word_count": len(parts),
+        "combo_mode": mode_label,
+    }
