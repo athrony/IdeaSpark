@@ -204,8 +204,9 @@ def main() -> None:
             if _rp == "gemini_rest":
                 st.caption(
                     "请填 **站点根**（如 `https://www.moyu.info`），也可粘贴完整 generateContent 链接，程序会只保留域名。"
-                    "模型名填文档里的资源 id（常见如 `gemini-2.0-flash`）。"
-                    "若 401 可试在 secrets 设 `GEMINI_RELAY_AUTH`=`bearer`。"
+                    "模型名须与魔芋文档 **完全一致**（常见如 `gemini-2.0-flash`）。"
+                    "若出现 **503 / 无可用渠道（distributor）**：表示该模型在你账号或默认分组下暂无路由，请换文档里其它可用模型，或联系魔芋。"
+                    "若 **401** 可试在 secrets 设 `GEMINI_RELAY_AUTH`=`bearer`。"
                 )
             else:
                 st.caption(
@@ -220,9 +221,16 @@ def main() -> None:
                     "GEMINI_RELAY_API_KEY", os.environ.get("GOOGLE_API_KEY", "")
                 )
             if "relay_model_input" not in st.session_state:
-                st.session_state.relay_model_input = os.environ.get(
-                    "GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite"
-                )
+                _env_m = (os.environ.get("GEMINI_RELAY_MODEL") or "").strip()
+                if _env_m:
+                    st.session_state.relay_model_input = _env_m
+                else:
+                    _rp0 = st.session_state.get("relay_protocol_input", "openai")
+                    st.session_state.relay_model_input = (
+                        "gemini-2.0-flash"
+                        if _rp0 == "gemini_rest"
+                        else "Gemini 3.1 Flash-Lite"
+                    )
             st.text_input(
                 "中转 Base URL",
                 placeholder=(
