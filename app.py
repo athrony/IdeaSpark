@@ -53,7 +53,7 @@ _merge_streamlit_secrets()
 
 from ideaspark.ai_evaluator import EvaluationResult, evaluate
 from ideaspark.batch_evaluator import evaluate_batch, merge_kept_results
-from ideaspark.webhook_notify import build_webhook_payload, post_json_webhook
+from ideaspark.webhook_notify import build_webhook_payloads, post_json_webhook_sequence
 from ideaspark.cartesian import sample_cartesian_recipes
 from ideaspark.combinator import draw_recipe, recipe_nouns_join, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
@@ -542,8 +542,8 @@ def main() -> None:
         if wh_url.strip():
             os.environ["WEBHOOK_URL"] = wh_url.strip()
         st.caption(
-            "企业微信机器人必须用 `msgtype=text` 等格式；选「企业微信群机器人」后推送成功时响应里应为 `errcode:0`。"
-            "通用 JSON 用于你自己写的接收服务。"
+            "企业微信选「群机器人」：长内容会**自动拆成多条**顺序发送（每条约 1900 字节内），"
+            "推送结果里会显示「第 1/n 条…」。通用 JSON 仍为单条 POST。"
         )
 
         pr1, pr2 = st.columns(2)
@@ -639,9 +639,9 @@ def main() -> None:
             )
             wh_auto = _webhook_url_resolved()
             if wh_auto and all_kept:
-                ok_wh, msg_wh = post_json_webhook(
+                ok_wh, msg_wh = post_json_webhook_sequence(
                     wh_auto,
-                    build_webhook_payload(
+                    build_webhook_payloads(
                         all_kept,
                         title="IdeaSpark 批量评审",
                         rounds=n_rounds,
@@ -658,7 +658,7 @@ def main() -> None:
 
         if push_wh and st.session_state.pipeline_kept:
             meta = st.session_state.get("pipeline_meta") or {}
-            payload = build_webhook_payload(
+            payloads = build_webhook_payloads(
                 st.session_state.pipeline_kept,
                 title="IdeaSpark 批量评审",
                 rounds=int(meta.get("rounds", 1)),
@@ -669,7 +669,7 @@ def main() -> None:
             if not url:
                 st.error("请先在本页填写 Webhook URL（或 Secrets 中的 WEBHOOK_URL）。")
             else:
-                ok, msg = post_json_webhook(url, payload)
+                ok, msg = post_json_webhook_sequence(url, payloads)
                 if ok:
                     st.success(f"已推送：{msg}")
                 else:

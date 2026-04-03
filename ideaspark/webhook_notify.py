@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import json
+import time
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
+
+# 企业微信 text.content 上限 2048 字节；JSON 包装后略超，单条内容留余量
+WECOM_TEXT_MAX_BYTES = 1900
 
 
 def post_json_webhook(url: str, payload: dict[str, Any], timeout: float = 60.0) -> tuple[bool, str]:
@@ -60,6 +64,27 @@ def post_json_webhook(url: str, payload: dict[str, Any], timeout: float = 60.0) 
         return False, str(e)
 
 
+def post_json_webhook_sequence(
+    url: str,
+    payloads: list[dict[str, Any]],
+    *,
+    timeout: float = 60.0,
+    pause_sec: float = 0.35,
+) -> tuple[bool, str]:
+    """顺序发送多条 JSON（企微长文拆条），任一条失败则中止。"""
+    if not payloads:
+        return True, "无内容，未发送"
+    lines: list[str] = []
+    for i, p in enumerate(payloads, 1):
+        ok, msg = post_json_webhook(url, p, timeout=timeout)
+        lines.append(f"第 {i}/{len(payloads)} 条：{msg}")
+        if not ok:
+            return False, "\n".join(lines)
+        if i < len(payloads) and pause_sec > 0:
+            time.sleep(pause_sec)
+    return True, "\n".join(lines)
+
+
 def build_batch_payload(
     kept: list[dict[str, Any]],
     *,
@@ -84,20 +109,54 @@ def _truncate_utf8(s: str, max_bytes: int) -> str:
         return s
     while s and len(s.encode("utf-8")) > max_bytes:
         s = s[:-1]
-    return s + "\n…(已截断，企微 text 单条上限 2048 字节)"
+    return s + "\n…(已截断)"
 
 
-def build_wecom_text_payload(
+def _utf8_prefix_len(rest: str, max_bytes: int) -> str:
+    """取 rest 的前缀，UTF-8 字节数不超过 max_bytes，尽量在换行处断开。"""
+    if not rest or max_bytes <= 0:
+        return ""
+    if len(rest.encode("utf-8")) <= max_bytes:
+        return rest
+    lo, hi = 0, len(rest)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(rest[:mid].encode("utf-8")) <= max_bytes:
+            lo = mid
+        else:
+            hi = mid - 1
+    cut = rest[:lo]
+    if not cut:
+        return rest.encode("utf-8")[:max_bytes].decode("utf-8", errors="ignore")
+    nl = cut.rfind("\n")
+    if nl > 0 and nl >= max(1, lo // 3):
+        return cut[: nl + 1]
+    return cut
+
+
+def _split_utf8_chunks(s: str, max_bytes: int) -> list[str]:
+    """将长字符串拆成多段，每段不超过 max_bytes（UTF-8）。"""
+    s = s.strip("\n")
+    if not s:
+        return [""]
+    out: list[str] = []
+    pos = 0
+    while pos < len(s):
+        chunk = _utf8_prefix_len(s[pos:], max_bytes)
+        if not chunk:
+            break
+        out.append(chunk.rstrip("\n"))
+        pos += len(chunk)
+    return [x for x in out if x]
+
+
+def _build_wecom_plain_body(
     kept: list[dict[str, Any]],
     *,
     title: str,
     rounds: int,
     generated: int,
-) -> dict[str, Any]:
-    """
-    企业微信群机器人 Webhook：必须带 msgtype，否则 errcode=40008 invalid message type。
-    文档：https://developer.work.weixin.qq.com/document/path/91770
-    """
+) -> str:
     lines: list[str] = [
         f"【{title}】",
         f"轮次 {rounds} · 总生成 {generated} · 保留 {len(kept)} 条",
@@ -116,23 +175,49 @@ def build_wecom_text_payload(
             buf = f"{i}. [{did}] {tier} · {label} · 均分{avg}"
             c = (x.get("comment") or "").strip()
             if c:
-                buf += f"\n  {c[:120]}"
+                buf += f"\n  {c[:200]}"
             lines.append(buf)
-    body = "\n".join(lines)
-    body = _truncate_utf8(body, 2040)
-    return {"msgtype": "text", "text": {"content": body}}
+    return "\n".join(lines)
 
 
-def build_webhook_payload(
+def build_wecom_text_payloads(
+    kept: list[dict[str, Any]],
+    *,
+    title: str,
+    rounds: int,
+    generated: int,
+    max_bytes: int = WECOM_TEXT_MAX_BYTES,
+) -> list[dict[str, Any]]:
+    """
+    企业微信群机器人：1 条或多条 msgtype=text。
+    超长时拆成多条 POST，避免单条 2048 字节截断。
+    """
+    plain = _build_wecom_plain_body(kept, title=title, rounds=rounds, generated=generated)
+    chunks = _split_utf8_chunks(plain, max_bytes)
+    if not chunks:
+        chunks = ["（空）"]
+    total = len(chunks)
+    out: list[dict[str, Any]] = []
+    for i, ch in enumerate(chunks, 1):
+        prefix = f"（{i}/{total}）\n" if total > 1 else ""
+        content = prefix + ch
+        content = _truncate_utf8(content, 2030)
+        out.append({"msgtype": "text", "text": {"content": content}})
+    return out
+
+
+def build_webhook_payloads(
     kept: list[dict[str, Any]],
     *,
     title: str,
     rounds: int,
     generated: int,
     format: str = "ideaspark",
-) -> dict[str, Any]:
-    """format: ideaspark（默认）| wecom_text（企业微信群机器人文本）"""
+) -> list[dict[str, Any]]:
+    """返回待 POST 的 JSON 列表；企微可能多条，通用 JSON 仅 1 条。"""
     fmt = (format or "ideaspark").strip().lower()
     if fmt in ("wecom", "wecom_text", "workweixin", "wxwork", "qywx"):
-        return build_wecom_text_payload(kept, title=title, rounds=rounds, generated=generated)
-    return build_batch_payload(kept, title=title, rounds=rounds, generated=generated)
+        return build_wecom_text_payloads(kept, title=title, rounds=rounds, generated=generated)
+    return [build_batch_payload(kept, title=title, rounds=rounds, generated=generated)]
+
+
