@@ -57,7 +57,9 @@ def _is_excellent(ev: EvaluationResult) -> bool:
 
 def main() -> None:
     st.title("✨ IdeaSpark")
-    st.caption("创意生成引擎 · 本源词库（第一性原理取向）· 随机组合 · AI 多维度评分 · 本地存档")
+    st.caption(
+        "创意生成引擎 · 10 维词库（技术/价值/主体/心理 + 叙事·文体·意象·媒介·美学·互文）· 随机组合 · AI 评价 · 本地存档"
+    )
 
     if "categories" not in st.session_state:
         st.session_state.categories = load_categories()
