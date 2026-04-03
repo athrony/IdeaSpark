@@ -1,0 +1,11 @@
+.env
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.sqlite3
+data/*.db
+data/word_bank.json
+ideas_saved/*.md
+.streamlit/secrets.toml
+.DS_Store
