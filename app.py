@@ -32,6 +32,8 @@ def _merge_streamlit_secrets() -> None:
             "GEMINI_RELAY_BASE_URL",
             "GEMINI_RELAY_API_KEY",
             "GEMINI_RELAY_MODEL",
+            "GEMINI_RELAY_PROTOCOL",
+            "GEMINI_RELAY_AUTH",
             "WEBHOOK_URL",
         ):
             if key in st.secrets:
@@ -110,10 +112,18 @@ def _relay_kwargs_for_batch() -> dict[str, str | None]:
     rm = (st.session_state.get("relay_model_input") or "").strip()
     if not rm:
         rm = (os.environ.get("GEMINI_RELAY_MODEL") or "Gemini 3.1 Flash-Lite").strip()
+    rp = (
+        st.session_state.get("relay_protocol_input")
+        or os.environ.get("GEMINI_RELAY_PROTOCOL")
+        or "openai"
+    ).strip()
+    if rp not in ("openai", "gemini_rest"):
+        rp = "openai"
     return {
         "relay_base_url": rb or None,
         "relay_api_key": rk or None,
         "relay_model": rm or None,
+        "relay_protocol": rp,
     }
 
 
@@ -142,7 +152,7 @@ def main() -> None:
             index=_provider_radio_index(),
             format_func=lambda x: {
                 "gemini": "Gemini 官方直连",
-                "relay": "中转 API（Gemini / OpenAI 兼容）",
+                "relay": "中转（OpenAI 兼容 或 Gemini 原生）",
                 "openai": "OpenAI 官方",
             }[x],
             horizontal=True,
@@ -172,8 +182,35 @@ def main() -> None:
 
         if prov == "relay":
             st.markdown(
-                "中转说明见 [魔芋 AI 文档](http://101.200.167.88:8001/#text-gemini)（一般为 OpenAI 兼容 `…/v1/chat/completions`）。"
+                "说明见 [魔芋文档](http://101.200.167.88:8001/#text-gemini)。"
+                "若中转提供 **OpenAI 兼容** 网关用第一项；只有 **Gemini 原生** 接口时用第二项。"
             )
+            if "relay_protocol_input" not in st.session_state:
+                rp0 = (os.environ.get("GEMINI_RELAY_PROTOCOL") or "openai").strip().lower()
+                st.session_state.relay_protocol_input = (
+                    rp0 if rp0 in ("openai", "gemini_rest") else "openai"
+                )
+            st.radio(
+                "中转接口类型",
+                options=["openai", "gemini_rest"],
+                format_func=lambda x: {
+                    "openai": "OpenAI 兼容（…/v1/chat/completions）",
+                    "gemini_rest": "Gemini 原生（…/v1beta/…:generateContent）",
+                }[x],
+                key="relay_protocol_input",
+                horizontal=True,
+            )
+            _rp = st.session_state.get("relay_protocol_input", "openai")
+            if _rp == "gemini_rest":
+                st.caption(
+                    "请填 **站点根**（如 `https://www.moyu.info`），也可粘贴完整 generateContent 链接，程序会只保留域名。"
+                    "模型名填文档里的资源 id（常见如 `gemini-2.0-flash`）。"
+                    "若 401 可试在 secrets 设 `GEMINI_RELAY_AUTH`=`bearer`。"
+                )
+            else:
+                st.caption(
+                    "填 OpenAI 兼容网关根路径，程序会请求 `…/v1/chat/completions`。"
+                )
             if "relay_base_url_input" not in st.session_state:
                 st.session_state.relay_base_url_input = os.environ.get(
                     "GEMINI_RELAY_BASE_URL", ""
@@ -188,9 +225,16 @@ def main() -> None:
                 )
             st.text_input(
                 "中转 Base URL",
-                placeholder="http://101.200.167.88:8001/v1",
-                help="须为 OpenAI 兼容网关根路径（程序会请求 …/v1/chat/completions）。"
-                "不要填 Gemini 的 …/v1beta/models/…:generateContent。",
+                placeholder=(
+                    "https://www.moyu.info"
+                    if _rp == "gemini_rest"
+                    else "http://101.200.167.88:8001/v1"
+                ),
+                help=(
+                    "Gemini 原生：站点根，勿手写 :generateContent。"
+                    if _rp == "gemini_rest"
+                    else "OpenAI 兼容：以 /v1 结尾或只填到端口由程序补全。"
+                ),
                 key="relay_base_url_input",
             )
             st.text_input(
@@ -210,6 +254,9 @@ def main() -> None:
             if rk:
                 os.environ["GEMINI_RELAY_API_KEY"] = rk
             os.environ["GEMINI_RELAY_MODEL"] = rm
+            os.environ["GEMINI_RELAY_PROTOCOL"] = str(
+                st.session_state.get("relay_protocol_input", "openai")
+            )
 
         auto_eval = st.checkbox("生成后自动评价第 1 条", value=False)
 

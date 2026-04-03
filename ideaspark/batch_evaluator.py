@@ -104,6 +104,7 @@ def _chat_completion_batch(
     relay_base_url: str | None = None,
     relay_api_key: str | None = None,
     relay_model: str | None = None,
+    relay_protocol: str | None = None,
 ) -> str:
     p = (provider or "gemini").lower().strip()
     if p in ("openai", "relay", "gemini_relay", "gemini-relay", "中转"):
@@ -115,19 +116,48 @@ def _chat_completion_batch(
                 raise ValueError("未设置 OPENAI_API_KEY")
             client = OpenAI(api_key=key, timeout=180.0)
             model = env_str("OPENAI_MODEL", "gpt-4o-mini")
-        else:
-            base = (relay_base_url or env_str("GEMINI_RELAY_BASE_URL")).strip()
-            if not base:
-                raise ValueError(
-                    "中转模式需要填写「中转 Base URL」或在环境变量中设置 GEMINI_RELAY_BASE_URL。"
-                )
-            base = _normalize_relay_base_url(base)
-            key = (relay_api_key or env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")).strip()
-            if not key:
-                raise ValueError("请设置中转 API Key，或填写 GOOGLE_API_KEY 作为备用。")
-            model = (relay_model or env_str("GEMINI_RELAY_MODEL", "Gemini 3.1 Flash-Lite")).strip()
-            client = OpenAI(api_key=key, base_url=base, timeout=180.0)
+            completion = _openai_chat_create_with_retry(
+                client,
+                model=model,
+                messages=[
+                    {"role": "system", "content": BATCH_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_text},
+                ],
+                temperature=0.25,
+            )
+            return (completion.choices[0].message.content or "").strip()
 
+        base = (relay_base_url or env_str("GEMINI_RELAY_BASE_URL")).strip()
+        if not base:
+            raise ValueError(
+                "中转模式需要填写「中转 Base URL」或在环境变量中设置 GEMINI_RELAY_BASE_URL。"
+            )
+        proto = (relay_protocol or env_str("GEMINI_RELAY_PROTOCOL", "openai")).lower().strip()
+        key = (relay_api_key or env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")).strip()
+        if not key:
+            raise ValueError("请设置中转 API Key，或填写 GOOGLE_API_KEY 作为备用。")
+        _def_m = (
+            "gemini-2.0-flash"
+            if proto in ("gemini_rest", "gemini", "native", "rest", "generatecontent")
+            else "Gemini 3.1 Flash-Lite"
+        )
+        model = (relay_model or env_str("GEMINI_RELAY_MODEL", _def_m)).strip()
+
+        if proto in ("gemini_rest", "gemini", "native", "rest", "generatecontent"):
+            from .gemini_relay_rest import generate_content_rest, normalize_gemini_relay_origin
+
+            origin = normalize_gemini_relay_origin(base)
+            return generate_content_rest(
+                origin=origin,
+                api_key=key,
+                model=model,
+                system_instruction=BATCH_SYSTEM_PROMPT,
+                user_text=user_text,
+                temperature=0.25,
+            )
+
+        base = _normalize_relay_base_url(base)
+        client = OpenAI(api_key=key, base_url=base, timeout=180.0)
         completion = _openai_chat_create_with_retry(
             client,
             model=model,
@@ -200,6 +230,8 @@ def _should_bisect_chunk_on_error(msg: str) -> bool:
         return False
     if "5xx" in msg or "服务端" in msg or "服务器内部" in msg:
         return True
+    if "状态 5" in msg:
+        return True
     if "超时" in msg or "无法连接" in msg:
         return True
     if "429" in msg or "限流" in msg:
@@ -215,6 +247,7 @@ def _evaluate_chunk_with_bisect(
     relay_base_url: str | None,
     relay_api_key: str | None,
     relay_model: str | None,
+    relay_protocol: str | None,
     depth: int = 0,
 ) -> tuple[str, list[dict[str, Any]]]:
     """
@@ -228,6 +261,7 @@ def _evaluate_chunk_with_bisect(
             relay_base_url=relay_base_url,
             relay_api_key=relay_api_key,
             relay_model=relay_model,
+            relay_protocol=relay_protocol,
         )
         return raw, parse_batch_items(raw)
     except ValueError as e:
@@ -244,6 +278,7 @@ def _evaluate_chunk_with_bisect(
             relay_base_url=relay_base_url,
             relay_api_key=relay_api_key,
             relay_model=relay_model,
+            relay_protocol=relay_protocol,
             depth=depth + 1,
         )
         r2, items2 = _evaluate_chunk_with_bisect(
@@ -253,6 +288,7 @@ def _evaluate_chunk_with_bisect(
             relay_base_url=relay_base_url,
             relay_api_key=relay_api_key,
             relay_model=relay_model,
+            relay_protocol=relay_protocol,
             depth=depth + 1,
         )
         return r1 + "\n---\n" + r2, items1 + items2
@@ -266,6 +302,7 @@ def evaluate_batch(
     relay_base_url: str | None = None,
     relay_api_key: str | None = None,
     relay_model: str | None = None,
+    relay_protocol: str | None = None,
 ) -> tuple[list[dict[str, Any]], str]:
     """
     返回 (解析后的 items 列表, 原始拼接文本)。
@@ -288,6 +325,7 @@ def evaluate_batch(
             relay_base_url=relay_base_url,
             relay_api_key=relay_api_key,
             relay_model=relay_model,
+            relay_protocol=relay_protocol,
         )
         raw_chunks.append(raw)
         all_items.extend(items)

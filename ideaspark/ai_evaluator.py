@@ -95,15 +95,14 @@ def evaluate_with_gemini(recipe_summary: str) -> EvaluationResult:
 def _normalize_relay_base_url(url: str) -> str:
     """
     OpenAI SDK 会把请求发到 {base_url}/chat/completions。
-    勿填 Gemini 原生地址（…/v1beta/models/...:generateContent），那是另一种协议。
+    若填的是 generateContent 形态，请改用侧栏「Gemini 原生」或换 …/v1 兼容地址。
     """
     u = url.strip().rstrip("/")
     low = u.lower()
     if "generatecontent" in low or "/v1beta/models" in low:
         raise ValueError(
-            "你填的是 Gemini 原生接口（generateContent），本应用走的是 OpenAI 兼容的「聊天补全」。"
-            "请到中转商文档里找「OpenAI 兼容」或 Chat Completions 的网关地址，"
-            "一般为 https://主机/…/v1 这类根路径，不要带 models/ 与 :generateContent。"
+            "当前为「OpenAI 兼容」中转，不能使用 generateContent 地址。"
+            "请将侧栏「中转接口」改为「Gemini 原生」，或向中转商索取 OpenAI 兼容的 …/v1 网关。"
         )
     if not u.endswith("/v1"):
         u = u + "/v1"
@@ -112,16 +111,42 @@ def _normalize_relay_base_url(url: str) -> str:
 
 def evaluate_with_gemini_relay(recipe_summary: str) -> EvaluationResult:
     """
-    中转站：通常为 OpenAI Chat Completions 兼容接口。
-    文档示例：魔芋 AI — http://101.200.167.88:8001/#text-gemini
-    环境变量：GEMINI_RELAY_BASE_URL、GEMINI_RELAY_API_KEY（或回退 GOOGLE_API_KEY）、GEMINI_RELAY_MODEL。
+    中转：GEMINI_RELAY_PROTOCOL=openai 时为 Chat Completions 兼容；
+    =gemini_rest 时为 Gemini 原生 generateContent（站点根 + v1beta/models/模型:generateContent）。
     """
+    proto = env_str("GEMINI_RELAY_PROTOCOL", "openai").lower().strip()
+    if proto in ("gemini_rest", "gemini", "native", "rest", "generatecontent"):
+        from .gemini_relay_rest import generate_content_rest, normalize_gemini_relay_origin
+
+        base = env_str("GEMINI_RELAY_BASE_URL")
+        if not base:
+            raise ValueError(
+                "Gemini 原生中转需要填写站点根地址，例如 https://www.moyu.info（不要带 v1beta 路径）。"
+            )
+        origin = normalize_gemini_relay_origin(base)
+        key = env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")
+        if not key:
+            raise ValueError("请设置中转密钥，或填写 GOOGLE_API_KEY 作为备用。")
+
+        model = env_str("GEMINI_RELAY_MODEL", "gemini-2.0-flash")
+        text = generate_content_rest(
+            origin=origin,
+            api_key=key,
+            model=model,
+            system_instruction=SYSTEM_PROMPT,
+            user_text=f"创意配方：{recipe_summary}",
+            temperature=0.6,
+        )
+        if not text:
+            raise RuntimeError("中转返回为空")
+        return parse_evaluation(text)
+
     from openai import OpenAI
 
     base = env_str("GEMINI_RELAY_BASE_URL")
     if not base:
         raise ValueError(
-            "中转模式需要 GEMINI_RELAY_BASE_URL（多为 http(s)://主机:端口/v1，详见中转商文档）。"
+            "中转模式需要 GEMINI_RELAY_BASE_URL（OpenAI 兼容多为 http(s)://主机/…/v1）。"
         )
     base = _normalize_relay_base_url(base)
     key = env_str("GEMINI_RELAY_API_KEY") or env_str("GOOGLE_API_KEY")
