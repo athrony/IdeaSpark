@@ -1,10 +1,11 @@
-"""合并核心、文学艺术、想象力扩展、十轮增量与万级程序化扩充，供 `word_bank` 加载为默认词库。"""
+"""合并核心、文学艺术、想象力扩展、十轮增量、概念短语与程序化补全，供 `word_bank` 加载为默认概念库。"""
 
 from __future__ import annotations
 
 from .lexicon_art_lit import ART_LIT_LEXICON
 from .lexicon_core import CORE_LEXICON
 from .lexicon_imagination import NEW_DIMENSIONS, TEN_ROUND_BOOSTS
+from .lexicon_concepts import CONCEPT_LEXICON
 from .lexicon_mass_expand import MASS_EXTRA_BY_CATEGORY
 
 
@@ -32,6 +33,9 @@ def _build_lexicon() -> dict[str, list[str]]:
         for cat, words in rd.items():
             base.setdefault(cat, [])
             base[cat].extend(words)
+    for cat, words in CONCEPT_LEXICON.items():
+        base.setdefault(cat, [])
+        base[cat].extend(words)
     for cat, words in MASS_EXTRA_BY_CATEGORY.items():
         base.setdefault(cat, [])
         base[cat].extend(words)

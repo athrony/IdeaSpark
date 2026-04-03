@@ -96,7 +96,7 @@ def draw_recipe(
     if k == 0:
         return {
             "parts": [],
-            "summary": "（请先在词库中补充词汇）",
+            "summary": "（请先在概念库中补充概念）",
             "word_count": 0,
             "combo_mode": str(combo_mode),
         }

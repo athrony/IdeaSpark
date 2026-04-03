@@ -1,4 +1,4 @@
-"""Preset word categories and persistent user vocabulary."""
+"""默认概念分类与用户持久化扩展（兼容原 word_bank.json 结构）。"""
 
 from __future__ import annotations
 

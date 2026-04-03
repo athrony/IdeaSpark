@@ -297,16 +297,16 @@ def main() -> None:
     col_main, col_side = st.columns([2, 1], gap="large")
 
     with col_main:
-        st.subheader("词库管理")
+        st.subheader("概念库管理")
         cats = st.session_state.categories
         tabs = st.tabs(list(cats.keys()))
         for i, name in enumerate(cats.keys()):
             with tabs[i]:
-                st.write("当前词列表：")
+                st.write("当前概念列表：")
                 st.caption(" · ".join(cats[name]) if cats[name] else "（空）")
                 c1, c2 = st.columns([3, 1])
                 with c1:
-                    new_w = st.text_input(f"添加新词 · {name}", key=f"add_{name}", placeholder="输入后点击添加")
+                    new_w = st.text_input(f"添加概念 · {name}", key=f"add_{name}", placeholder="输入后点击添加")
                 with c2:
                     st.write("")
                     st.write("")
@@ -317,13 +317,13 @@ def main() -> None:
                         save_categories(st.session_state.categories)
                         st.rerun()
 
-        with st.expander("批量丰富词库（推荐：大量补充时用这个）", expanded=False):
+        with st.expander("批量丰富概念库（推荐：大量补充时用这个）", expanded=False):
             st.markdown(
-                "**怎么攒词**：书籍目录/索引、白皮书术语表、竞品官网、论文关键词 → 整理成清单后整段粘贴。"
-                "\n\n**你可以帮我时**：发我**领域方向**（如「少儿科普硬件」）或**一小段目录/词表**，"
-                "我可按当前**全部维度**给出**候选词草稿**，你再筛选后粘贴进下方。"
+                "**怎么攒概念**：书籍目录/索引、白皮书术语表、竞品官网、论文关键词 → 整理成清单后整段粘贴。"
+                "\n\n**你可以帮我时**：发我**领域方向**（如「少儿科普硬件」）或**一小段目录/概念表**，"
+                "我可按当前**全部维度**给出**候选概念草稿**，你再筛选后粘贴进下方。"
                 "\n\n**版权**：只用你有权使用的材料；全书 OCR 不宜，目录与关键词更安全。"
-                "\n\n**与任意大模型配合**：提示「按维度 `技术/行业/人群/心理需求/叙事…` 各生成 20 个中文名词」，"
+                "\n\n**与任意大模型配合**：提示「按维度 `技术/行业/人群/心理需求/叙事…` 各生成 20 个中文名词/短语概念」，"
                 "导出后人工删改再合并。"
             )
             bc1, bc2 = st.columns(2)
@@ -334,13 +334,13 @@ def main() -> None:
                     key="bulk_import_dim",
                 )
             with bc2:
-                st.caption("当前各维度词量")
+                st.caption("当前各维度概念量")
                 st.caption(" · ".join(f"{k}:{len(cats[k])}" for k in cats.keys()))
             bulk_area = st.text_area(
-                "词列表（每行一词，或逗号/顿号分隔）",
+                "概念列表（每行一条，或逗号/顿号分隔）",
                 height=180,
                 key="bulk_import_text",
-                placeholder="语义检索\n向量数据库\n…\n或一行：词甲，词乙、词丙",
+                placeholder="语义检索\n向量数据库\n…\n或一行：概念甲，概念乙、概念丙",
             )
             if st.button("合并到该维度", type="primary", key="bulk_import_apply"):
                 st.session_state.categories = bulk_add_words(
@@ -352,7 +352,7 @@ def main() -> None:
                 n_in = len(parse_bulk_words(bulk_area or ""))
                 n_tot = len(st.session_state.categories.get(bulk_dim, []))
                 st.success(
-                    f"已解析 **{n_in}** 个词并合并进「{bulk_dim}」（该维度现共 **{n_tot}** 词）。"
+                    f"已解析 **{n_in}** 条概念并合并进「{bulk_dim}」（该维度现共 **{n_tot}** 条）。"
                 )
                 st.rerun()
 
@@ -378,7 +378,7 @@ def main() -> None:
                             save_categories(st.session_state.categories)
                             st.success(
                                 "已合并："
-                                + " · ".join(f"{k}（+{len(v)} 词）" for k, v in patch.items())
+                                + " · ".join(f"{k}（+{len(v)} 条）" for k, v in patch.items())
                             )
                             st.rerun()
             tpl = {"categories": {k: [] for k in cats.keys()}}
@@ -392,10 +392,10 @@ def main() -> None:
 
         st.divider()
         _combo_labels: dict[str, str | int] = {
-            "随机 (2–4 词，维度随机)": "random",
-            "2 词（两维度碰撞）": 2,
-            "3 词（三维度碰撞）": 3,
-            "4 词（全维度）": 4,
+            "随机 (2–4 个概念，维度随机)": "random",
+            "2 个概念（两维度碰撞）": 2,
+            "3 个概念（三维度碰撞）": 3,
+            "4 个概念（全维度）": 4,
         }
         row1, row2 = st.columns([3, 2])
         with row1:
@@ -404,7 +404,7 @@ def main() -> None:
                 options=list(_combo_labels.keys()),
                 index=0,
                 key="idea_combo_label",
-                help="每一「词槽」独立随机选一类再选一词；同类可重复出现（如 技术+技术）。同一类内尽量抽不同词，词不够时才重复。",
+                help="每一「概念槽」独立随机选一类再抽一条概念；同类可重复出现（如 技术+技术）。同一类内尽量不重复，概念不够时才重复。",
             )
         with row2:
             batch_n = st.number_input(
@@ -428,10 +428,10 @@ def main() -> None:
             gen = st.button("🎲 生成创意配方", type="primary", use_container_width=True)
         with hb2:
             anchor_word = st.text_input(
-                "行业锚点（必选词）",
+                "行业锚点（必选概念）",
                 key="anchor_word_input",
                 placeholder="如：金融交易",
-                help="指定后首槽固定为该词；可填词库外自定义词。留空则不锁定首词。",
+                help="指定后首槽固定为该概念；可填概念库外自定义短语。留空则不锁定首槽。",
             )
         with hb3:
             anchor_opts = ["（不使用锚点）"] + cat_keys
@@ -446,7 +446,7 @@ def main() -> None:
                 "锚点维度",
                 options=anchor_opts,
                 key="idea_anchor_pick",
-                help="首槽使用的维度；与锚点词一起构成必选组合。",
+                help="首槽使用的维度；与锚点概念一起构成必选组合。",
             )
         with hb4:
             correlation = st.slider(
@@ -479,7 +479,7 @@ def main() -> None:
 
         with st.expander("笛卡尔积 · 随机种子抽样", expanded=False):
             st.caption(
-                "选定若干维度，各维截取最多 N 个词后做笛卡尔积；空间过大时以种子做随机抽样（尽量不重复）。"
+                "选定若干维度，各维截取最多 N 条概念后做笛卡尔积；空间过大时以种子做随机抽样（尽量不重复）。"
             )
             cp_dims = st.multiselect(
                 "参与维度（顺序保留）",
@@ -489,7 +489,7 @@ def main() -> None:
             )
             cp1, cp2, cp3, cp4 = st.columns(4)
             with cp1:
-                cp_cap = st.number_input("每维最多词数", 2, 120, 18, key="cp_cap")
+                cp_cap = st.number_input("每维最多概念数", 2, 120, 18, key="cp_cap")
             with cp2:
                 cp_n = st.number_input("抽样条数", 1, 500, 40, key="cp_n")
             with cp3:
@@ -548,8 +548,8 @@ def main() -> None:
             overview_rows = [
                 {
                     "序号": i + 1,
-                    "名词组合": recipe_nouns_join(r),
-                    "词数": r.get("word_count", len(recipe_pairs(r.get("parts")))),
+                    "概念组合": recipe_nouns_join(r),
+                    "概念数": r.get("word_count", len(recipe_pairs(r.get("parts")))),
                     "组合模式": r.get("combo_mode", ""),
                     "技术摘要": r["summary"],
                 }
@@ -567,8 +567,8 @@ def main() -> None:
                 wc = r.get("word_count", len(recipe_pairs(r.get("parts"))))
                 cm = r.get("combo_mode", "")
                 with st.container(border=True):
-                    st.markdown(f"##### 第 {i + 1} 条 · {wc} 词 · {cm}")
-                    st.markdown(f"**名词组合：** `{recipe_nouns_join(r)}`")
+                    st.markdown(f"##### 第 {i + 1} 条 · {wc} 个概念 · {cm}")
+                    st.markdown(f"**概念组合：** `{recipe_nouns_join(r)}`")
                     parts = recipe_pairs(r.get("parts"))
                     if parts:
                         n = len(parts)
@@ -765,7 +765,7 @@ def main() -> None:
                     {
                         "轮次": x.get("round", 1),
                         "编号": x.get("display_id", x["id"]),
-                        "名词组合": x.get("nouns", ""),
+                        "概念组合": x.get("nouns", ""),
                         "优化题名": x.get("optimized_name", ""),
                         "tier": x["tier"],
                         "avg": x["avg"],
@@ -796,7 +796,7 @@ def main() -> None:
             cur = recipes[pick]
             ev = st.session_state.evaluations.get(pick)
 
-            st.caption(f"名词组合：`{recipe_nouns_join(cur)}`")
+            st.caption(f"概念组合：`{recipe_nouns_join(cur)}`")
 
             if st.button("对所选配方发送 AI 评价", use_container_width=True):
                 try:
