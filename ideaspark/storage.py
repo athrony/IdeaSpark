@@ -90,6 +90,11 @@ def save_to_markdown(
         f"- 时间：{datetime.now().isoformat(timespec='seconds')}",
         f"- 配方：{recipe_summary}",
         "",
+    ]
+    if ev.get("short_title"):
+        lines.extend(["", f"- **优化题名**：{ev['short_title']}", ""])
+    lines.extend(
+        [
         "## 维度评分",
         "",
         f"| 维度 | 分数 |",
@@ -104,7 +109,8 @@ def save_to_markdown(
         "",
         "## 配方明细",
         "",
-    ]
+        ]
+    )
     for i, (k, v) in enumerate(recipe_pairs(recipe_parts), start=1):
         lines.append(f"- **{i}. {k}**：{v}")
     lines.append("")

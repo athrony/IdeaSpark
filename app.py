@@ -54,7 +54,7 @@ from ideaspark.ai_evaluator import EvaluationResult, evaluate
 from ideaspark.batch_evaluator import evaluate_batch, merge_kept_results
 from ideaspark.webhook_notify import build_batch_payload, post_json_webhook
 from ideaspark.cartesian import sample_cartesian_recipes
-from ideaspark.combinator import draw_recipe, recipe_pairs
+from ideaspark.combinator import draw_recipe, recipe_nouns_join, recipe_pairs
 from ideaspark.config import ROOT, ai_provider
 from ideaspark.storage import init_db, list_recent_sqlite, save_to_markdown, save_to_sqlite
 from ideaspark.word_bank import add_word, load_categories, save_categories
@@ -95,6 +95,14 @@ def _flatten_groups(boxes: list[dict]) -> list[str]:
                 seen.add(it)
                 out.append(it)
     return out
+
+
+def _webhook_url_resolved() -> str:
+    """优先使用当前页 Webhook 输入框，其次 Secrets / 环境变量。"""
+    u = (st.session_state.get("webhook_url_input") or "").strip()
+    if u:
+        return u
+    return (os.environ.get("WEBHOOK_URL") or "").strip()
 
 
 def _relay_kwargs_for_batch() -> dict[str, str | None]:
@@ -449,9 +457,10 @@ def main() -> None:
             overview_rows = [
                 {
                     "序号": i + 1,
+                    "名词组合": recipe_nouns_join(r),
                     "词数": r.get("word_count", len(recipe_pairs(r.get("parts")))),
-                    "组合": r.get("combo_mode", ""),
-                    "一行摘要": r["summary"],
+                    "组合模式": r.get("combo_mode", ""),
+                    "技术摘要": r["summary"],
                 }
                 for i, r in enumerate(recipes)
             ]
@@ -468,15 +477,17 @@ def main() -> None:
                 cm = r.get("combo_mode", "")
                 with st.container(border=True):
                     st.markdown(f"##### 第 {i + 1} 条 · {wc} 词 · {cm}")
+                    st.markdown(f"**名词组合：** `{recipe_nouns_join(r)}`")
                     parts = recipe_pairs(r.get("parts"))
                     if parts:
                         n = len(parts)
                         cols = st.columns(n)
                         for j, (k, v) in enumerate(parts):
                             with cols[j]:
-                                st.caption(f"{k} · 槽{j + 1}")
+                                st.caption(f"{k}")
                                 st.markdown(f"**{v}**")
-                    st.markdown(f"`{r['summary']}`")
+                    st.caption("技术摘要（含维度标签）")
+                    st.code(r["summary"], language=None)
 
             err = st.session_state.get("eval_error")
             if err:
@@ -530,7 +541,9 @@ def main() -> None:
             ap = st.session_state.get("idea_anchor_pick", "（不使用锚点）")
             acat = None if ap == "（不使用锚点）" else ap
             aw_raw = (st.session_state.get("anchor_word_input") or "").strip()
-            with st.spinner("流水线运行中（可能需几十秒）…"):
+            n_rounds = max(1, int(st.session_state.get("pl_rounds", 1)))
+            n_per = max(1, int(st.session_state.get("pl_count", 50)))
+            with st.status(f"流水线（共 {n_rounds} 轮，每轮 {n_per} 条）…", expanded=True) as pl_status:
                 all_kept: list = []
                 total_gen = 0
                 rkw: dict = {}
@@ -542,7 +555,11 @@ def main() -> None:
                         )
                         st.stop()
                 try:
-                    for _ in range(int(pl_rounds)):
+                    for ri in range(n_rounds):
+                        pl_status.update(
+                            label=f"第 {ri + 1}/{n_rounds} 轮：生成 {n_per} 条 → 批量评审 → 筛选…",
+                            state="running",
+                        )
                         recipes = [
                             draw_recipe(
                                 st.session_state.categories,
@@ -552,7 +569,7 @@ def main() -> None:
                                 anchor_word=aw_raw if aw_raw else None,
                                 category_order=dim_order,
                             )
-                            for _ in range(int(pl_count))
+                            for _ in range(n_per)
                         ]
                         total_gen += len(recipes)
                         items, _raw = evaluate_batch(
@@ -567,26 +584,48 @@ def main() -> None:
                             min_avg=float(pl_min),
                             exclude_weak=bool(pl_ex_weak),
                         )
+                        for row in kept:
+                            row["round"] = ri + 1
+                            row["display_id"] = f"R{ri + 1}-{row['id']}"
                         all_kept.extend(kept)
+                    pl_status.update(label="流水线全部完成", state="complete")
                     st.session_state.pipeline_kept = all_kept
                     st.session_state.pipeline_meta = {
                         "generated": total_gen,
-                        "rounds": int(pl_rounds),
+                        "rounds": n_rounds,
                         "kept": len(all_kept),
                     }
                 except ValueError as err:
-                    # Cloud 会对未捕获异常全文脱敏；捕获后用 st.error 才能看到具体原因
+                    pl_status.update(label="失败", state="error")
                     st.error(err.args[0] if err.args else "批量评审未通过，请检查模型与网络后重试。")
                     st.stop()
                 except Exception:
+                    pl_status.update(label="失败", state="error")
                     logging.exception("一键流水线：批量评审未捕获异常")
                     st.error(
                         "批量评审出现未预期错误。可尝试减小每批评审条数、稍后重试；完整堆栈见 Cloud「Manage app」日志。"
                     )
                     st.stop()
             st.success(
-                f"完成：共生成 {total_gen} 条，筛选保留 {len(all_kept)} 条（可继续推 Webhook）。"
+                f"完成：共 {n_rounds} 轮，累计生成 {total_gen} 条，筛选保留 {len(all_kept)} 条。"
             )
+            wh_auto = _webhook_url_resolved()
+            if wh_auto and all_kept:
+                ok_wh, msg_wh = post_json_webhook(
+                    wh_auto,
+                    build_batch_payload(
+                        all_kept,
+                        title="IdeaSpark 批量评审",
+                        rounds=n_rounds,
+                        generated=total_gen,
+                    ),
+                )
+                if ok_wh:
+                    st.success(f"已自动推送到 Webhook：{msg_wh}")
+                else:
+                    st.warning(f"Webhook 自动推送失败：{msg_wh}（可稍后用下方按钮重试）")
+            elif all_kept and not wh_auto:
+                st.caption("未配置 Webhook URL，已跳过自动推送；填写后可手动推送。")
 
         if push_wh and st.session_state.pipeline_kept:
             meta = st.session_state.get("pipeline_meta") or {}
@@ -596,9 +635,9 @@ def main() -> None:
                 rounds=int(meta.get("rounds", 1)),
                 generated=int(meta.get("generated", 0)),
             )
-            url = (os.environ.get("WEBHOOK_URL") or "").strip()
+            url = _webhook_url_resolved()
             if not url:
-                st.error("请先填写 Webhook URL。")
+                st.error("请先在本页填写 Webhook URL（或 Secrets 中的 WEBHOOK_URL）。")
             else:
                 ok, msg = post_json_webhook(url, payload)
                 if ok:
@@ -612,7 +651,10 @@ def main() -> None:
             st.dataframe(
                 [
                     {
-                        "id": x["id"],
+                        "轮次": x.get("round", 1),
+                        "编号": x.get("display_id", x["id"]),
+                        "名词组合": x.get("nouns", ""),
+                        "优化题名": x.get("optimized_name", ""),
                         "tier": x["tier"],
                         "avg": x["avg"],
                         "mp": x["mp"],
@@ -636,11 +678,13 @@ def main() -> None:
             pick = st.selectbox(
                 "评价 / 存档对象",
                 options=list(range(len(recipes))),
-                format_func=lambda i: f"第 {i + 1} 条 · {recipes[i]['summary'][:40]}…",
+                format_func=lambda i: f"第 {i + 1} 条 · {recipe_nouns_join(recipes[i])[:36]}…",
                 key="pick_recipe_idx",
             )
             cur = recipes[pick]
             ev = st.session_state.evaluations.get(pick)
+
+            st.caption(f"名词组合：`{recipe_nouns_join(cur)}`")
 
             if st.button("对所选配方发送 AI 评价", use_container_width=True):
                 try:
@@ -651,6 +695,9 @@ def main() -> None:
                     st.error(str(e))
 
             if ev:
+                if ev.short_title:
+                    st.markdown("**优化题名**")
+                    st.info(ev.short_title)
                 m1, m2, m3 = st.columns(3)
                 m1.metric("市场潜力", f"{ev.market_potential}/10")
                 m2.metric("技术可行性", f"{ev.technical_feasibility}/10")
@@ -669,6 +716,7 @@ def main() -> None:
                     "market_potential": ev.market_potential,
                     "technical_feasibility": ev.technical_feasibility,
                     "innovation_breakthrough": ev.innovation_breakthrough,
+                    "short_title": ev.short_title,
                     "business_draft": ev.business_draft,
                 }
                 s1, s2 = st.columns(2)

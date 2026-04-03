@@ -16,6 +16,12 @@ class Recipe(TypedDict):
     combo_mode: str
 
 
+def recipe_nouns_join(recipe: dict[str, Any] | Any) -> str:
+    """仅名词/词组合（无维度前缀），用于清晰展示。"""
+    parts = recipe_pairs(recipe.get("parts") if isinstance(recipe, dict) else recipe)
+    return " · ".join(w for _, w in parts) if parts else "（空）"
+
+
 def recipe_pairs(parts: Any) -> list[tuple[str, str]]:
     """兼容旧版 dict 或新版 list[[a,b],...]。"""
     if not parts:

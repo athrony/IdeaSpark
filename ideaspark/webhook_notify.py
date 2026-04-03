@@ -8,7 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
-def post_json_webhook(url: str, payload: dict[str, Any], timeout: float = 25.0) -> tuple[bool, str]:
+def post_json_webhook(url: str, payload: dict[str, Any], timeout: float = 60.0) -> tuple[bool, str]:
     if not (url or "").strip():
         return False, "URL 为空"
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
