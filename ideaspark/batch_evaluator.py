@@ -40,36 +40,36 @@ def _openai_chat_create_with_retry(client: Any, **kwargs: Any) -> Any:
         except APIConnectionError:
             if attempt >= max_attempts - 1:
                 raise ValueError(
-                    "无法连接中转/API 服务。请检查 Base URL、网络或稍后重试。"
+                    "无法连接中转或模型接口。请检查基础地址、网络或稍后重试。"
                 ) from None
         except APIStatusError as e:
             code = getattr(e, "status_code", None)
             # 先处理 4xx（不含 429，否则会与限流重试逻辑冲突）
             if code is not None and code < 500 and code != 429:
                 if code == 401:
-                    msg = "API Key 无效或未授权（HTTP 401）。"
+                    msg = "密钥无效或未授权（状态 401）。请检查侧栏或 Secrets 中的密钥。"
                 elif code == 404:
                     msg = (
-                        "接口或模型不存在（HTTP 404）。请确认 Base URL（含 /v1）与模型名是否与中转商一致。"
+                        "地址或模型不存在（状态 404）。请确认基础地址含 /v1，且模型名与中转商文档一致。"
                     )
                 elif code == 400:
                     msg = (
-                        "请求被拒绝（HTTP 400）。可尝试减小「每批评审条数」或更换模型名。"
+                        "请求被拒绝（状态 400）。可尝试减小「每批评审条数」或更换模型名。"
                     )
                 else:
-                    msg = f"API 返回错误（HTTP {code}）。"
+                    msg = f"接口返回错误（状态 {code}）。"
                 raise ValueError(msg) from None
             if code == 429:
                 if attempt >= max_attempts - 1:
                     raise ValueError(
-                        "触发限流（HTTP 429），已重试仍失败。请稍后再试或减小批量。"
+                        "触发限流（状态 429），已重试仍失败。请稍后再试或减小批量。"
                     ) from None
             else:
                 # 5xx 或 status 为空
                 if attempt >= max_attempts - 1:
                     raise ValueError(
-                        "中转/API 返回服务器错误（HTTP 5xx），已重试仍失败。"
-                        "多为对方服务短暂故障或负载过高，请稍后重试、减小每批条数，或查看中转商状态。"
+                        "中转返回服务端错误（状态 5xx），已重试仍失败。"
+                        "多为对端短暂故障或负载高，请稍后重试、减小每批条数，或联系中转商。"
                     ) from None
         except Exception as e:
             # 兼容不同版本 SDK 抛出的 InternalServerError 等
@@ -77,11 +77,11 @@ def _openai_chat_create_with_retry(client: Any, **kwargs: Any) -> Any:
             if name in ("InternalServerError", "InternalError") or "ServerError" in name:
                 if attempt >= max_attempts - 1:
                     raise ValueError(
-                        "中转/API 返回服务器内部错误，已多次重试仍失败。请稍后重试或减小批量。"
+                        "中转返回服务器内部错误，已多次重试仍失败。请稍后重试或减小批量。"
                     ) from None
             else:
                 raise ValueError(
-                    f"调用模型接口失败（{name}）。请检查配置与网络后重试。"
+                    f"调用模型失败（{name}）。请检查配置与网络后重试。"
                 ) from None
 
         time.sleep(base_delay * (2**attempt))

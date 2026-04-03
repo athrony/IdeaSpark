@@ -4,6 +4,7 @@ IdeaSpark — Streamlit entry: word banks, random recipes, AI evaluation, persis
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 from pathlib import Path
@@ -484,38 +485,49 @@ def main() -> None:
                             "中转模式需要填写侧栏「中转 Base URL」，或在 Streamlit Secrets / 环境变量中设置 GEMINI_RELAY_BASE_URL。"
                         )
                         st.stop()
-                for _ in range(int(pl_rounds)):
-                    recipes = [
-                        draw_recipe(
-                            st.session_state.categories,
-                            combo_mode=combo_m,
-                            correlation=corr,
-                            anchor_category=acat,
-                            anchor_word=aw_raw if aw_raw else None,
-                            category_order=dim_order,
+                try:
+                    for _ in range(int(pl_rounds)):
+                        recipes = [
+                            draw_recipe(
+                                st.session_state.categories,
+                                combo_mode=combo_m,
+                                correlation=corr,
+                                anchor_category=acat,
+                                anchor_word=aw_raw if aw_raw else None,
+                                category_order=dim_order,
+                            )
+                            for _ in range(int(pl_count))
+                        ]
+                        total_gen += len(recipes)
+                        items, _raw = evaluate_batch(
+                            recipes,
+                            prov,
+                            chunk_size=int(pl_chunk),
+                            **rkw,
                         )
-                        for _ in range(int(pl_count))
-                    ]
-                    total_gen += len(recipes)
-                    items, _raw = evaluate_batch(
-                        recipes,
-                        prov,
-                        chunk_size=int(pl_chunk),
-                        **rkw,
+                        kept = merge_kept_results(
+                            recipes,
+                            items,
+                            min_avg=float(pl_min),
+                            exclude_weak=bool(pl_ex_weak),
+                        )
+                        all_kept.extend(kept)
+                    st.session_state.pipeline_kept = all_kept
+                    st.session_state.pipeline_meta = {
+                        "generated": total_gen,
+                        "rounds": int(pl_rounds),
+                        "kept": len(all_kept),
+                    }
+                except ValueError as err:
+                    # Cloud 会对未捕获异常全文脱敏；捕获后用 st.error 才能看到具体原因
+                    st.error(err.args[0] if err.args else "批量评审未通过，请检查模型与网络后重试。")
+                    st.stop()
+                except Exception:
+                    logging.exception("一键流水线：批量评审未捕获异常")
+                    st.error(
+                        "批量评审出现未预期错误。可尝试减小每批评审条数、稍后重试；完整堆栈见 Cloud「Manage app」日志。"
                     )
-                    kept = merge_kept_results(
-                        recipes,
-                        items,
-                        min_avg=float(pl_min),
-                        exclude_weak=bool(pl_ex_weak),
-                    )
-                    all_kept.extend(kept)
-                st.session_state.pipeline_kept = all_kept
-                st.session_state.pipeline_meta = {
-                    "generated": total_gen,
-                    "rounds": int(pl_rounds),
-                    "kept": len(all_kept),
-                }
+                    st.stop()
             st.success(
                 f"完成：共生成 {total_gen} 条，筛选保留 {len(all_kept)} 条（可继续推 Webhook）。"
             )
